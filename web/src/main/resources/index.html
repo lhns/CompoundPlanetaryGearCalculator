@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Compound Planetary Gear Calculator</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel-2: #0e1116;
+      --border: #30363d;
+      --text: #e6e6e6;
+      --muted: #a6accd;
+      --accent: #58a6ff;
+      --accent-2: #7ee787;
+      --row-sel: #1f6feb44;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #0b0f14, #0d1117 320px);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 0.75rem 1.25rem;
+      background: rgba(22, 27, 34, 0.85);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: baseline; gap: 0.75rem;
+      position: sticky; top: 0; z-index: 10;
+    }
+    header h1 { font-size: 1.05rem; margin: 0; letter-spacing: 0.01em; }
+    header .badge {
+      font-size: 0.7rem; color: var(--muted); padding: 2px 8px;
+      border: 1px solid var(--border); border-radius: 999px;
+    }
+    .app { padding: 1rem; max-width: 1400px; margin: 0 auto; display: grid; gap: 1rem; }
+    .top-grid { display: grid; grid-template-columns: 320px 1fr; gap: 1rem; }
+    @media (max-width: 900px) { .top-grid { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset;
+    }
+    .panel h2 { margin: 0 0 0.5rem 0; font-size: 0.95rem; color: var(--text); }
+    .panel-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.5rem; }
+    .panel-title { font-weight: 600; }
+    .panel-sub { color: var(--muted); font-size: 0.8rem; font-family: ui-monospace, monospace; }
+
+    label { display: block; font-size: 0.78rem; margin-top: 0.55rem; color: var(--muted); }
+    input, select {
+      width: 100%; padding: 0.4rem 0.5rem; background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px; font: inherit;
+    }
+    input[type="number"] { font-variant-numeric: tabular-nums; }
+    input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    .range { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+
+    button.go {
+      margin-top: 1rem; padding: 0.55rem 1rem;
+      background: linear-gradient(180deg, #2ea043, #1f7a34);
+      color: white; border: 0; border-radius: 6px; cursor: pointer;
+      font-weight: 600; letter-spacing: 0.02em; width: 100%;
+    }
+    button.go:hover { filter: brightness(1.1); }
+    .status { margin-top: 0.5rem; font-size: 0.75rem; color: var(--muted); font-family: ui-monospace, monospace; text-align: right; }
+
+    .schematic-panel { display: flex; flex-direction: column; }
+    .schematic-panel .panel-header { gap: 0.6rem; flex-wrap: wrap; }
+    .controls { display: flex; align-items: center; gap: 0.5rem; }
+    .iconbtn {
+      width: 28px; height: 28px; border-radius: 6px;
+      background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border); cursor: pointer; padding: 0; font-size: 0.85rem;
+    }
+    .iconbtn:hover { background: #21262d; }
+    .speed-label { color: var(--muted); font-size: 0.75rem; }
+    input.speed { width: 110px; padding: 0; height: 4px; cursor: pointer; }
+    .schematic-sub { font-size: 0.78rem; color: var(--muted); font-family: ui-monospace, monospace; padding: 0.1rem 0 0.4rem 0; min-height: 1.1em; }
+    .schematic {
+      flex: 1;
+      background:
+        radial-gradient(circle at 30% 30%, rgba(88,166,255,0.06), transparent 60%),
+        radial-gradient(circle at 70% 70%, rgba(157,78,221,0.06), transparent 60%),
+        #07090d;
+      border: 1px solid var(--border); border-radius: 8px;
+      min-height: 380px; padding: 0.5rem;
+    }
+    .schematic svg { width: 100%; height: 100%; min-height: 360px; display: block; }
+
+    .results-panel { padding: 0; overflow: hidden; }
+    .results-panel .panel-header { padding: 0.85rem 1rem 0.4rem 1rem; margin: 0; }
+    .table-wrap { max-height: 380px; overflow: auto; border-top: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { padding: 0.4rem 0.7rem; border-bottom: 1px solid rgba(48,54,61,0.6); text-align: left; }
+    th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    td.num, th:nth-child(-n+2), th:nth-child(8), th:nth-child(12) { text-align: right; font-family: ui-monospace, monospace; }
+    tr.row { transition: background 0.08s linear; cursor: pointer; }
+    tr.row:hover { background: rgba(255,255,255,0.03); }
+    tr.row.sel { background: var(--row-sel); }
+
+    /* Export buttons in the results-panel header */
+    .exports { display: flex; gap: 0.4rem; }
+    .export-btn {
+      padding: 0.25rem 0.65rem; font-size: 0.78rem; font-weight: 600;
+      background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+      border-radius: 5px; cursor: pointer; letter-spacing: 0.04em;
+    }
+    .export-btn:hover:not(:disabled) { background: #21262d; border-color: var(--accent); color: var(--accent); }
+    .export-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Dual-knob range slider */
+    .range-row { display: grid; gap: 0.25rem; margin-top: 0.55rem; }
+    .range-row > label:first-child { margin: 0; }
+    .range-slider {
+      position: relative;
+      height: 22px;
+      margin: 0.3rem 0.4rem 0.1rem;
+    }
+    .range-slider .range-track {
+      position: absolute; top: 9px; left: 0; right: 0;
+      height: 4px; background: var(--border); border-radius: 2px;
+    }
+    .range-slider .range-track-fill {
+      position: absolute; top: 9px; height: 4px;
+      background: var(--accent); border-radius: 2px;
+      pointer-events: none;
+    }
+    .range-slider input[type="range"] {
+      position: absolute; top: 0; left: 0; right: 0;
+      width: 100%; height: 22px; margin: 0;
+      pointer-events: none;
+      background: transparent;
+      -webkit-appearance: none; appearance: none;
+    }
+    .range-slider input[type="range"]::-webkit-slider-thumb {
+      pointer-events: auto;
+      -webkit-appearance: none; appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--accent); border: 2px solid #0d1117;
+      cursor: grab;
+      margin-top: -5px;
+    }
+    .range-slider input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
+    .range-slider input[type="range"]::-moz-range-thumb {
+      pointer-events: auto;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: var(--accent); border: 2px solid #0d1117;
+      cursor: grab;
+    }
+    .range-slider input[type="range"]::-webkit-slider-runnable-track {
+      background: transparent; border: none;
+    }
+    .range-slider input[type="range"]::-moz-range-track { background: transparent; border: none; }
+    .range-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+    .range-inputs input.range-num { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Compound Planetary Gear Calculator</h1>
+    <span class="badge">Scala 3 · Scala.js · Laminar</span>
+  </header>
+  <div id="app"></div>
+  <script src="./cpgc-web-fastopt/main.js"></script>
+</body>
+</html>
