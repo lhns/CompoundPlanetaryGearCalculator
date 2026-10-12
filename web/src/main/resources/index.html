@@ -77,9 +77,80 @@
       width: 28px; height: 28px; border-radius: 6px;
       background: var(--panel-2); color: var(--text);
       border: 1px solid var(--border); cursor: pointer; padding: 0; font-size: 0.85rem;
+      display: inline-flex; align-items: center; justify-content: center;
     }
     .iconbtn:hover { background: #21262d; }
-    .speed-label { color: var(--muted); font-size: 0.75rem; }
+    .speed-label {
+      color: var(--muted); font-size: 0.75rem;
+      display: inline-flex; align-items: center; height: 28px;
+      margin: 0;
+    }
+    .rpm-readout {
+      color: var(--muted); font-size: 0.8rem; font-family: ui-monospace, monospace;
+      min-width: 6.5rem; text-align: right;
+      display: inline-flex; align-items: center; justify-content: flex-end;
+      height: 28px;
+      margin: 0;
+    }
+    .coupling-note {
+      font-size: 0.72rem; color: var(--muted);
+      font-family: ui-monospace, monospace;
+      padding: 0.15rem 0 0.1rem 0; min-height: 0.85rem;
+      line-height: 1.3;
+    }
+    /* Preset picker — visually distinct from secondary role-select dropdowns. */
+    .preset-select {
+      width: 100%; padding: 0.5rem 0.6rem;
+      background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--accent); border-radius: 6px;
+      font: inherit; font-size: 0.9rem; cursor: pointer;
+    }
+    .preset-select:focus { outline: 1px solid var(--accent); }
+    /* Progressive-disclosure section (▸ Advanced …). */
+    .advanced-section { margin: 0.6rem 0 0.3rem 0; }
+    .advanced-summary {
+      cursor: pointer; user-select: none;
+      color: var(--muted); font-size: 0.8rem;
+      padding: 0.35rem 0; border-top: 1px dashed var(--border);
+    }
+    .advanced-summary:hover { color: var(--text); }
+    .advanced-arrow { display: inline-block; width: 1.1em; }
+    .advanced-customized { color: var(--accent); font-style: italic; }
+    .advanced-content { padding-left: 0.4rem; margin-bottom: 0.5rem; }
+    .advanced-content.hidden { display: none; }
+    .legacy-derived { font-size: 0.7rem; opacity: 0.7; margin-top: 0.3rem; }
+    /* Transient toast notifications — fixed stack, top-right. */
+    .toast-stack {
+      position: fixed; top: 1rem; right: 1rem; z-index: 100;
+      display: flex; flex-direction: column; gap: 0.5rem;
+      max-width: 24rem; pointer-events: none;
+    }
+    .toast {
+      pointer-events: auto;
+      display: flex; align-items: flex-start; gap: 0.6rem;
+      background: var(--panel); color: var(--text);
+      border: 1px solid var(--border); border-left-width: 3px;
+      border-radius: 6px; padding: 0.6rem 0.7rem;
+      font-size: 0.82rem; line-height: 1.35;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      animation: toast-in 0.18s ease-out;
+    }
+    @keyframes toast-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+    .toast-error { border-left-color: #f85149; }
+    .toast-warn  { border-left-color: #d29922; }
+    .toast-info  { border-left-color: var(--accent); }
+    .toast-msg { flex: 1; min-width: 0; word-break: break-word; }
+    .toast-dismiss {
+      flex: 0 0 auto; background: transparent; border: 0;
+      color: var(--muted); cursor: pointer; font-size: 0.85rem;
+      padding: 0; line-height: 1;
+    }
+    .toast-dismiss:hover { color: var(--text); }
+    @keyframes cpgc-shimmer {
+      0%   { transform: translateX(-60px); }
+      100% { transform: translateX(320px); }
+    }
+    .cpgc-shimmer { animation: cpgc-shimmer 1.2s linear infinite; }
     input.speed { width: 110px; padding: 0; height: 4px; cursor: pointer; }
     .schematic-sub { font-size: 0.78rem; color: var(--muted); font-family: ui-monospace, monospace; padding: 0.1rem 0 0.4rem 0; min-height: 1.1em; }
     .schematic {
@@ -103,6 +174,153 @@
     tr.row { transition: background 0.08s linear; cursor: pointer; }
     tr.row:hover { background: rgba(255,255,255,0.03); }
     tr.row.sel { background: var(--row-sel); }
+    th.col-warn, td.col-warn { width: 1.5em; padding-left: 0.4rem; padding-right: 0.3rem; text-align: center; }
+    .warn-glyph { color: #d29922; font-size: 0.9rem; cursor: help; }
+
+    .show-more-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 0.6rem 1rem; border-top: 1px solid var(--border);
+      font-size: 0.85rem; gap: 0.6rem; flex-wrap: nowrap;
+    }
+    .show-more-row > .panel-sub {
+      flex: 1 1 auto; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .show-more-right {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      margin-left: auto; flex: 0 0 auto;
+    }
+    .rows-label { font-size: 0.78rem; color: var(--muted); margin: 0; }
+    .rows-select {
+      height: 28px; padding: 0 1.7rem 0 0.6rem;
+      background-color: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border); border-radius: 5px;
+      font: inherit; font-size: 0.78rem;
+      cursor: pointer;
+      appearance: none; -webkit-appearance: none; -moz-appearance: none;
+      background-image:
+        linear-gradient(45deg,  transparent 50%, var(--muted) 50%),
+        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position:
+        calc(100% - 12px) calc(50% - 1px),
+        calc(100% - 7px)  calc(50% - 1px);
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+    }
+    .rows-select:hover { border-color: var(--accent); }
+    .rows-select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    .rows-select option { background: var(--panel); color: var(--text); }
+
+    /* Topology composable controls */
+    .topology { display: grid; gap: 0.35rem; }
+    .topology-segment {
+      display: inline-flex;
+      width: 100%;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 2px;
+      gap: 2px;
+    }
+    .topology-segment > button {
+      flex: 1; min-width: 0;
+      padding: 0.4rem 0.6rem;
+      font-size: 0.78rem; font-weight: 500;
+      background: transparent; color: var(--muted);
+      border: 0; border-radius: 4px;
+      cursor: pointer; letter-spacing: 0;
+      transition: background 0.1s linear, color 0.1s linear, box-shadow 0.1s linear;
+    }
+    .topology-segment > button:hover:not(:disabled):not(.active) {
+      color: var(--text); background: rgba(255,255,255,0.04);
+    }
+    .topology-segment > button.active {
+      background: rgba(88, 166, 255, 0.18);
+      color: var(--accent);
+      box-shadow: inset 0 0 0 1px rgba(88,166,255,0.55);
+    }
+    .topology-segment > button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .topology-toggle {
+      display: flex; align-items: center; gap: 0.55rem;
+      font-size: 0.78rem; color: var(--muted);
+      cursor: pointer; user-select: none;
+      padding: 0.25rem 0;
+      position: relative;
+    }
+    .topology-toggle.disabled { opacity: 0.4; cursor: not-allowed; }
+    .topology-toggle .switch {
+      position: relative; flex-shrink: 0;
+      width: 28px; height: 16px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .topology-toggle .switch::after {
+      content: "";
+      position: absolute; top: 1px; left: 1px;
+      width: 12px; height: 12px;
+      background: var(--muted);
+      border-radius: 50%;
+      transition: transform 0.12s, background 0.12s;
+    }
+    .topology-toggle input[type="checkbox"] {
+      position: absolute; opacity: 0; pointer-events: none;
+      width: 0; height: 0; margin: 0;
+    }
+    .topology-toggle input[type="checkbox"]:checked + .switch {
+      background: rgba(88, 166, 255, 0.25);
+      border-color: var(--accent);
+    }
+    .topology-toggle input[type="checkbox"]:checked + .switch::after {
+      transform: translateX(12px);
+      background: var(--accent);
+    }
+    .role-select {
+      width: 100%;
+      height: 30px; padding: 0 1.8rem 0 0.55rem;
+      background-color: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+      font: inherit; font-size: 0.78rem;
+      cursor: pointer;
+      appearance: none; -webkit-appearance: none; -moz-appearance: none;
+      background-image:
+        linear-gradient(45deg,  transparent 50%, var(--muted) 50%),
+        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position:
+        calc(100% - 12px) calc(50% - 1px),
+        calc(100% - 7px)  calc(50% - 1px);
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+    }
+    .role-select:hover { border-color: var(--accent); }
+    .role-select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    .role-select option:disabled { color: #555; }
+    .topology-derived {
+      font-size: 0.72rem; color: var(--muted);
+      font-family: ui-monospace, monospace;
+      padding: 0.2rem 0; opacity: 0.8;
+    }
+    .topology-hint {
+      font-size: 0.72rem; color: #d29922;
+      padding: 0.1rem 0;
+      min-height: 1em;  /* reserve a line so the form doesn't jump when the hint shows/hides */
+    }
+    /* Sort-by pills in the results-panel header */
+    .results-panel .panel-header { flex-wrap: wrap; gap: 0.5rem; }
+    .sort-pills { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+    .sort-pill {
+      padding: 0.25rem 0.7rem; font-size: 0.75rem; font-weight: 600;
+      background: var(--panel-2); color: var(--muted);
+      border: 1px solid var(--border); border-radius: 999px; cursor: pointer;
+      letter-spacing: 0.02em;
+    }
+    .sort-pill:hover { background: #21262d; color: var(--text); }
+    .sort-pill.active {
+      background: rgba(88, 166, 255, 0.15);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
 
     /* Export buttons in the results-panel header */
     .exports { display: flex; gap: 0.4rem; }
