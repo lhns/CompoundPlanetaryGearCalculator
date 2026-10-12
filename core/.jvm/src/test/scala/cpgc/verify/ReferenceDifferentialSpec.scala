@@ -128,19 +128,16 @@ class ReferenceDifferentialSpec extends FunSuite:
     }
     rs
 
-  // Known disagreements, per mode and category. They are kept in the suite as
-  // `.fail` so the build stays green while the disagreement remains documented.
-  //  - missing / NSS (literal reference): the reference reads PlanetSpacingOK at the
-  //    stale global Planet1/Planet2 (= index 0), so NSS never filters on stage-1 spacing
-  //    (or rejects everything). Ours (Enumerator.matchesMode, Enumerator.scala:~31)
-  //    requires even spacing on BOTH stages, so it drops the unspaced ones.
-  //  - same for NSSFIX (reference repaired to intended semantics: stage 1 only): ours
-  //    still requires stage-2 even spacing, so it misses designs with unspaced stage 2.
+  // Known disagreements (kept as `.fail` so the build stays green).
+  //  - NSS (literal reference): the reference reads PlanetSpacingOK at the stale global
+  //    Planet1/Planet2 (= index 0), so it never really filters stage-1 spacing (or rejects
+  //    everything when gearset 0 is unspaced). Ours applies stage-1 spacing
+  //    (Compounder.scala:168), so it lacks the reference's unspaced designs. The NSSFIX
+  //    fixtures (reference repaired to stage-1-only) are the real oracle for NSS.
   private def expectFail(f: Fixture, category: String): Boolean =
     (f.mode, category) match
       case ("NSS", "extra") if f.file == "nss_A_N3.csv" => true // reference yields 0 rows
       case ("NSS", "missing") => f.file != "nss_A_N3.csv"
-      case ("NSSFIX", "missing") => true
       case _                             => false
 
   fixtures.foreach { f =>
@@ -170,18 +167,26 @@ class ReferenceDifferentialSpec extends FunSuite:
   }
 
   // Cause checks for the NSS disagreement (these pass).
-  test("NSSFIX: every missing design has an unevenly spaced stage 2 and an even stage 1") {
-    fixtures.filter(_.mode == "NSSFIX").foreach { f =>
-      val miss = results(f.file).missing
-      assert(miss.nonEmpty)
-      assert(miss.forall { r =>
-        (r.s1 + r.r1) % f.n == 0 && (r.s2 + r.r2) % f.n != 0
-      }, f.file)
-    }
-  }
-
   test("NSS (literal reference): reference output contains unevenly spaced stage-1 sets") {
     // Stale global Planet1 (= 0) in the reference means stage-1 spacing is never really tested.
     val f = fixtures.find(_.file == "nss_A_N4.csv").get
     assert(readRef(f).exists(r => (r.s1 + r.r1) % f.n != 0))
+  }
+
+  test("CDCP with default sun min (8) and factor (3) loses designs vs the reference's forced min 2 / factor 1e5") {
+    var anyLoss = false
+    fixtures.filter(_.mode == "CDCP").foreach { f =>
+      val forced = config(f)
+      val dflt   = forced.copy(sunTeeth = TeethBounds(8, f.maxSun - 1), sunPlanetFactor = 3.0)
+      def count(c: SearchConfig) = Calculator.search(c).count { d =>
+        val a = d.stage1.set; val b = d.stage2.get.set
+        fitAtan(a.sun.toInt, a.planet.toInt, f.n) && fitAtan(b.sun.toInt, b.planet.toInt, f.n) &&
+          d.stage1.module.value > f.minModule && d.stage2.get.module.value > f.minModule
+      }
+      val (all, kept) = (count(forced), count(dflt))
+      println(f"CDCP default-settings loss ${f.file}%-14s forced=$all%6d default=$kept%6d lost=${all - kept}%6d")
+      assert(kept <= all)
+      anyLoss ||= kept < all
+    }
+    assert(anyLoss)
   }
