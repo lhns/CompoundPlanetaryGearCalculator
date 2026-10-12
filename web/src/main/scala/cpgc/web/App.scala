@@ -2,7 +2,7 @@ package cpgc.web
 
 import com.raquo.laminar.api.L.*
 import cpgc.Calculator
-import cpgc.constraints.{Body, BodyRole, Coupling, SearchConfig, TeethBounds, Topology}
+import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
 import cpgc.domain.{CompoundDesign, Mode, ProfileShift, Ratio, Validity}
 import cpgc.`export`.{Csv, Json, OpenScad}
 import cpgc.search.Scorer
@@ -88,72 +88,9 @@ object App:
   // roles). For topologies that don't match any named preset, the picker
   // shows `Custom` and the Advanced section is the way to edit them.
 
-  /** Ring-to-sun cascade: classic shared carrier + `R1 ≡ S2`. */
-  private val ringToSunCascadeTopology: Topology = Topology(
-    stages = 2,
-    roles = Map(
-      Body.S1 -> BodyRole.Input,
-      Body.R2 -> BodyRole.Output,
-      Body.R1 -> BodyRole.Fixed,
-      Body.C1 -> BodyRole.Free,
-      Body.S2 -> BodyRole.Free,
-      Body.C2 -> BodyRole.Free
-    ),
-    firstCoupling  = Coupling.CarrierToCarrier,
-    secondCoupling = Coupling.RingToSun
-  )
+  private def presetTopology(p: GearboxPreset): Topology = UiLogic.presetTopology(p)
 
-  /** Ravigneaux family: `C1 ≡ S2` + `R1 ≡ R2`. */
-  private val ravigneauxTopology: Topology = Topology(
-    stages = 2,
-    roles = Map(
-      Body.S1 -> BodyRole.Input,
-      Body.C2 -> BodyRole.Output,
-      Body.R1 -> BodyRole.Fixed,
-      Body.C1 -> BodyRole.Free,
-      Body.S2 -> BodyRole.Free,
-      Body.R2 -> BodyRole.Free
-    ),
-    firstCoupling  = Coupling.CarrierToSun,
-    secondCoupling = Coupling.RingToRing
-  )
-
-  /** Simpson family: `C1 ≡ R2` + `S1 ≡ S2`. */
-  private val simpsonTopology: Topology = Topology(
-    stages = 2,
-    roles = Map(
-      Body.S1 -> BodyRole.Input,
-      Body.C2 -> BodyRole.Output,
-      Body.R1 -> BodyRole.Fixed,
-      Body.C1 -> BodyRole.Free,
-      Body.S2 -> BodyRole.Free,
-      Body.R2 -> BodyRole.Free
-    ),
-    firstCoupling  = Coupling.CarrierToRing,
-    secondCoupling = Coupling.SunToSun
-  )
-
-  /** Map a preset → its canonical `Topology`. */
-  private def presetTopology(p: GearboxPreset): Topology = p match
-    case GearboxPreset.SingleStage       => Topology.singleStage
-    case GearboxPreset.SunDriven         => Topology.standardCompound
-    case GearboxPreset.CarrierDriven     => Topology.cdcpCompound
-    case GearboxPreset.NoSecondSun       => Topology.nssCompound
-    case GearboxPreset.RingToSunCascade  => ringToSunCascadeTopology
-    case GearboxPreset.Ravigneaux        => ravigneauxTopology
-    case GearboxPreset.Simpson           => simpsonTopology
-    case GearboxPreset.Custom            => Topology.standardCompound // unused: picker doesn't apply Custom
-
-  /** Reverse-lookup: which preset (if any) does this `Topology` match? */
-  private def topologyPreset(t: Topology): GearboxPreset =
-    if      t == Topology.singleStage      then GearboxPreset.SingleStage
-    else if t == Topology.standardCompound then GearboxPreset.SunDriven
-    else if t == Topology.cdcpCompound     then GearboxPreset.CarrierDriven
-    else if t == Topology.nssCompound      then GearboxPreset.NoSecondSun
-    else if t == ringToSunCascadeTopology  then GearboxPreset.RingToSunCascade
-    else if t == ravigneauxTopology        then GearboxPreset.Ravigneaux
-    else if t == simpsonTopology           then GearboxPreset.Simpson
-    else                                        GearboxPreset.Custom
+  private def topologyPreset(t: Topology): GearboxPreset = UiLogic.topologyPreset(t)
 
   /** Short user-facing label for the picker. */
   private def presetLabel(p: GearboxPreset): String = p match
@@ -210,60 +147,9 @@ object App:
       render(container, root())
     }(unsafeWindowOwner)
 
-  private def parseDouble(s: String): Option[Double] =
-    s.trim.replace(',', '.').toDoubleOption
+  private def parseDouble(s: String): Option[Double] = UiLogic.parseDouble(s)
 
-  /** Extract a single URL parameter value (e.g. `target=53.12` → `Some("53.12")`).
-    * Returns `None` if the param isn't present. Used by `initialTopology` and
-    * by the input-bounds parsing for shareable URLs. */
-  private def urlParam(name: String): Option[String] =
-    val q = dom.window.location.search.stripPrefix("?")
-    q.split('&').iterator
-      .map(_.split('=').toList)
-      .collectFirst { case k :: v :: Nil if k == name => v }
-
-  /** Parse a `lo-hi` range string into `(lo, hi)`. Returns `None` if either
-    * part isn't an int. Used for `?sun=10-40` style bounds in the URL. */
-  private def parseRange(s: String): Option[(Int, Int)] =
-    s.split('-').toList match
-      case lo :: hi :: Nil =>
-        for l <- lo.toIntOption; h <- hi.toIntOption yield (l, h)
-      case _ => None
-
-  private def initialTopology(): Topology =
-    val q = dom.window.location.search
-    val m =
-      if q.contains("mode=single") then Mode.SingleStage
-      else if q.contains("mode=cdcp") then Mode.CDCP
-      else if q.contains("mode=nss")  then Mode.NSS
-      else Mode.Standard
-    // `?coupling1=` and `?coupling2=` accept any `Coupling` case name; the
-    // legacy `?coupling=` flag still sets just the second coupling.
-    def couplingParam(name: String): Option[Coupling] =
-      urlParam(name).flatMap(v => Coupling.values.find(_.toString == v))
-    val first  = couplingParam("coupling1").getOrElse(Coupling.CarrierToCarrier)
-    val second = couplingParam("coupling2")
-      .orElse(couplingParam("coupling"))
-      .getOrElse(Coupling.PlanetStack)
-    val canonical = Topology.fromMode(m)
-    // A malformed URL (e.g. `?coupling1=X&coupling2=X`) must not crash startup —
-    // fall back to the mode's canonical topology if the coupling pair is invalid.
-    val base =
-      try canonical.copy(firstCoupling = first, secondCoupling = second)
-      catch case _: IllegalArgumentException => canonical
-    // Optional `?input=`, `?output=`, `?fixed=` role overrides (body names) —
-    // lets shareable URLs encode a full novel topology.
-    def bodyParam(name: String): Option[Body] =
-      urlParam(name).flatMap(v => Body.values.find(_.toString == v))
-    (bodyParam("input"), bodyParam("output"), bodyParam("fixed")) match
-      case (Some(in), Some(out), Some(fx)) if Set(in, out, fx).size == 3 =>
-        val pinned = Map(in -> BodyRole.Input, out -> BodyRole.Output, fx -> BodyRole.Fixed)
-        val roles = base.roles.map { (b, r) =>
-          b -> pinned.getOrElse(b, if r == BodyRole.Absent then BodyRole.Absent else BodyRole.Free)
-        }
-        try Topology(base.stages, roles, base.firstCoupling, base.secondCoupling)
-        catch case _: IllegalArgumentException => base
-      case _ => base
+  private def query: String = dom.window.location.search
 
   // ── Hard bounds for sliders (absolute min/max the user can drag to). ──────
   private val SunRange     = (2, 100)
@@ -274,29 +160,24 @@ object App:
   private def root(): HtmlElement =
     val animator = Animator()
     animator.start()
-    if dom.window.location.search.contains("pause") then animator.running.set(false)
+    if query.contains("pause") then animator.running.set(false)
     // Test-only: force a no-results state for screenshot verification.
-    val forceNoResults = dom.window.location.search.contains("nodesigns")
-    val topologyVar   = Var[Topology](initialTopology())
-    // URL-driven initial values for the bounds and numeric inputs. Format:
-    //   ?sun=10-40&planet=10-18&ring=40-120&planets=3-4&od=150&minmod=0.5&target=53.12
-    // Falls back to the defaults when a param is absent or unparseable.
-    val sunR     = urlParam("sun").flatMap(parseRange).getOrElse((10, 40))
-    val planetR  = urlParam("planet").flatMap(parseRange).getOrElse((10, 18))
-    val ringR    = urlParam("ring").flatMap(parseRange).getOrElse((40, 120))
-    val planetsR = urlParam("planets").flatMap(parseRange).getOrElse((3, 4))
-    val sunMin        = Var(sunR._1)
-    val sunMax        = Var(sunR._2)
-    val planetMin     = Var(planetR._1)
-    val planetMax     = Var(planetR._2)
-    val ringMin       = Var(if forceNoResults then 200 else ringR._1)
-    val ringMax       = Var(if forceNoResults then 200 else ringR._2)
-    val planetsMin    = Var(planetsR._1)
-    val planetsMax    = Var(planetsR._2)
-    val odVar         = Var(urlParam("od").flatMap(_.toDoubleOption).getOrElse(150.0))
-    val minModule     = Var(urlParam("minmod").flatMap(_.toDoubleOption).getOrElse(0.5))
-    val sunPlanetFact = Var(urlParam("spfact").getOrElse(""))
-    val targetVar     = Var(urlParam("target").getOrElse("53.12"))
+    val forceNoResults = query.contains("nodesigns")
+    val form0         = UiLogic.initialForm(query)
+    val topologyVar   = Var[Topology](form0.topology)
+    // URL-driven initial values (see `UiLogic.initialForm`).
+    val sunMin        = Var(form0.sunMin)
+    val sunMax        = Var(form0.sunMax)
+    val planetMin     = Var(form0.planetMin)
+    val planetMax     = Var(form0.planetMax)
+    val ringMin       = Var(if forceNoResults then 200 else form0.ringMin)
+    val ringMax       = Var(if forceNoResults then 200 else form0.ringMax)
+    val planetsMin    = Var(form0.planetsMin)
+    val planetsMax    = Var(form0.planetsMax)
+    val odVar         = Var(form0.od)
+    val minModule     = Var(form0.minModule)
+    val sunPlanetFact = Var(form0.sunPlanetFactor)
+    val targetVar     = Var(form0.target)
     val displayCount  = Var(10)
     val sortByVar     = Var[SortBy](SortBy.BestFit)
 
@@ -318,11 +199,6 @@ object App:
 
     // Normalise an inverted (lo > hi) pair before passing it to TeethBounds, so
     // the user can drag/type freely without tripping the `max >= min` invariant.
-    def bounds(lo: Var[Int], hi: Var[Int]): TeethBounds =
-      val l = math.min(lo.now(), hi.now())
-      val h = math.max(lo.now(), hi.now())
-      TeethBounds(l, h)
-
     // Cancellation token for the chunked search. Each `runSearch` call bumps
     // the epoch; in-flight chunks that captured an older epoch exit on their
     // next iteration, freeing the JS thread for the new search.
@@ -339,18 +215,17 @@ object App:
       // changed topology (which would be a design/topology desync).
       selectedVar.set(None)
       val t0 = js.Date.now()
-      val cfg = SearchConfig(
-        mode            = topologyVar.now().legacyMode.getOrElse(Mode.Standard),
-        topology        = Some(topologyVar.now()),
-        sunTeeth        = bounds(sunMin, sunMax),
-        planetTeeth     = bounds(planetMin, planetMax),
-        ringTeeth       = bounds(ringMin, ringMax),
-        planets         = bounds(planetsMin, planetsMax),
-        firstStageOD    = odVar.now(),
-        minModule       = minModule.now(),
-        sunPlanetFactor = parseDouble(sunPlanetFact.now()).getOrElse(1e9),
-        topPerTarget    = ComputeCap,
-        targets         = targetVar.now().split(',').toList.flatMap(s => parseDouble(s)).map(Ratio.apply)
+      val cfg = UiLogic.buildConfig(
+        FormValues(
+          topology = topologyVar.now(),
+          sunMin = sunMin.now(), sunMax = sunMax.now(),
+          planetMin = planetMin.now(), planetMax = planetMax.now(),
+          ringMin = ringMin.now(), ringMax = ringMax.now(),
+          planetsMin = planetsMin.now(), planetsMax = planetsMax.now(),
+          od = odVar.now(), minModule = minModule.now(),
+          sunPlanetFactor = sunPlanetFact.now(), target = targetVar.now()
+        ),
+        topPerTarget = ComputeCap
       )
 
       // The phased state machine lives in `Calculator.searchSteps`. Each
@@ -716,64 +591,9 @@ object App:
   // held that role, preserving the "exactly one Input, one Output, one Fixed"
   // invariant. The remaining bodies are Free.
 
-  /** Move `body` to `newRole`, displacing whoever previously held `newRole`
-    * into `body`'s previous role. Invariants of `Topology` are preserved, and
-    * the user's chosen `firstCoupling` / `secondCoupling` are carried through
-    * (a role change must not silently reset the coupling). */
-  private def assignRole(t: Topology, body: Body, newRole: BodyRole): Topology =
-    if t.roles.get(body).contains(newRole) then t
-    else
-      val previousOwnRole = t.roles(body)
-      val previousHolder  = t.roles.collectFirst { case (b, r) if r == newRole => b }
-      val updated = previousHolder match
-        case Some(b) if b != body =>
-          t.roles.updated(body, newRole).updated(b, previousOwnRole)
-        case _ =>
-          t.roles.updated(body, newRole)
-      Topology(t.stages, updated, t.firstCoupling, t.secondCoupling)
-
-  /** Toggle S2 between `Absent` and `Free`. If S2 currently holds a pin role
-    * (Input / Output / Fixed), the role is reassigned to any Free body first
-    * before flipping to Absent — keeps invariants. */
-  private def setS2Present(t: Topology, present: Boolean): Topology =
-    if t.stages != 2 then t
-    else if present then
-      t.roles.get(Body.S2) match
-        case Some(BodyRole.Absent) =>
-          // S2 + R2 come back; carry the user's coupling choice through.
-          Topology(2, t.roles.updated(Body.S2, BodyRole.Free), t.firstCoupling, t.secondCoupling)
-        case _ => t // already present
-    else
-      val s2CurrentRole = t.roles.getOrElse(Body.S2, BodyRole.Free)
-      if s2CurrentRole == BodyRole.Absent then t
-      else
-        // If S2 holds a pin role, transfer it to a Free body before going Absent.
-        val withS2DePinned: Topology = s2CurrentRole match
-          case BodyRole.Free | BodyRole.Absent => t
-          case pinRole =>
-            t.roles.collectFirst { case (b, BodyRole.Free) if b != Body.S2 => b } match
-              case Some(freeBody) =>
-                Topology(2, t.roles.updated(freeBody, pinRole).updated(Body.S2, BodyRole.Free),
-                         t.firstCoupling, t.secondCoupling)
-              case None =>
-                // No Free body to take S2's pin role — can't make S2 absent
-                // without breaking the one-pin-each invariant. No-op rather
-                // than throw (a throw here would poison the topology Var).
-                return t
-        Topology(2, withS2DePinned.roles.updated(Body.S2, BodyRole.Absent),
-                 withS2DePinned.firstCoupling, withS2DePinned.secondCoupling)
-
-  /** Switch between single-stage and compound. We reset to the canonical
-    * `singleStage` / `standardCompound` rather than try to preserve roles —
-    * the body set changes, so role preservation isn't generally meaningful. */
-  private def setStageCount(t: Topology, n: Int): Topology = n match
-    case 1 => Topology.singleStage
-    case 2 => if t.stages == 2 then t else Topology.standardCompound
-    case _ => t
-
   private def topologyControls(v: Var[Topology]): HtmlElement =
     val stagesSig    = v.signal.map(_.stages)
-    val compoundSig  = stagesSig.map(_ == 2)
+    val compoundSig  = v.signal.map(t => !UiLogic.couplingSelectorsDisabled(t))
     val inputBody    = v.signal.map(_.input)
     val outputBody   = v.signal.map(_.output)
     val fixedBody    = v.signal.map(_.fixed)
@@ -839,13 +659,13 @@ object App:
               cls("active") <-- stagesSig.map(_ == 1),
               titleAttr := "One planetary stage: sun + planets + ring + carrier.",
               "Single stage",
-              onClick.preventDefault --> { _ => safeSet(v, setStageCount(v.now(), 1)) }
+              onClick.preventDefault --> { _ => safeSet(v, UiLogic.setStageCount(v.now(), 1)) }
             ),
             button(
               cls("active") <-- stagesSig.map(_ == 2),
               titleAttr := "Two planetary stages sharing a carrier; compound reduction.",
               "Compound (2 stages)",
-              onClick.preventDefault --> { _ => safeSet(v, setStageCount(v.now(), 2)) }
+              onClick.preventDefault --> { _ => safeSet(v, UiLogic.setStageCount(v.now(), 2)) }
             )
           ),
           label(cls := "stage-coupling-row",
@@ -856,7 +676,7 @@ object App:
             disabled <-- compoundSig.map(!_),
             titleAttr := "First inter-stage weld. The classic compound uses Carrier 1 ↔ Carrier 2.",
             onChange.mapToValue --> Observer[String] { name =>
-              safeSet(v, v.now().copy(firstCoupling = Coupling.valueOf(name)))
+              safeSet(v, UiLogic.setCoupling(v.now(), CouplingSlot.First, Coupling.valueOf(name)))
             },
             Coupling.values.toSeq.map { c =>
               option(
@@ -867,10 +687,7 @@ object App:
                 //  - PlanetStack option, unless the other dropdown is CarrierToCarrier
                 //    (a single stacked pinion physically requires the carriers to be
                 //    coupled — see Edge-Case Catalogue #19).
-                disabled <-- v.signal.map { t =>
-                  t.secondCoupling == c ||
-                  (c == Coupling.PlanetStack && t.secondCoupling != Coupling.CarrierToCarrier)
-                },
+                disabled <-- v.signal.map(UiLogic.couplingOptionDisabled(_, CouplingSlot.First, c)),
                 Coupling.label(c)
               )
             }
@@ -883,16 +700,13 @@ object App:
             disabled <-- compoundSig.map(!_),
             titleAttr := "Second inter-stage weld. The classic compound uses stacked planets (P1 ↔ P2).",
             onChange.mapToValue --> Observer[String] { name =>
-              safeSet(v, v.now().copy(secondCoupling = Coupling.valueOf(name)))
+              safeSet(v, UiLogic.setCoupling(v.now(), CouplingSlot.Second, Coupling.valueOf(name)))
             },
             Coupling.values.toSeq.map { c =>
               option(
                 value := c.toString,
                 selected <-- v.signal.map(_.secondCoupling == c),
-                disabled <-- v.signal.map { t =>
-                  t.firstCoupling == c ||
-                  (c == Coupling.PlanetStack && t.firstCoupling != Coupling.CarrierToCarrier)
-                },
+                disabled <-- v.signal.map(UiLogic.couplingOptionDisabled(_, CouplingSlot.Second, c)),
                 Coupling.label(c)
               )
             }
@@ -923,7 +737,7 @@ object App:
               controlled(
                 checked <-- s2PresentSig,
                 onInput.mapToChecked --> Observer[Boolean] { b =>
-                  safeSet(v, setS2Present(v.now(), b))
+                  safeSet(v, UiLogic.setS2Present(v.now(), b))
                 }
               )
             ),
@@ -953,7 +767,7 @@ object App:
       titleAttr := tooltip,
       onChange.mapToValue --> Observer[String] { bodyName =>
         val b = Body.valueOf(bodyName)
-        safeSet(v, assignRole(v.now(), b, targetRole))
+        safeSet(v, UiLogic.assignRole(v.now(), b, targetRole))
       },
       // We render an option for every Body, disabling those that are Absent
       // in the current topology so the user sees the full set with NSS-hidden

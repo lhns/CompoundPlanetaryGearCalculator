@@ -51,6 +51,7 @@ lazy val web = (project in file("web"))
     scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.NoModule)),
     libraryDependencies ++= Seq(
       "org.scala-js" %%% "scalajs-dom" % "2.8.0",
-      "com.raquo"    %%% "laminar"     % "17.2.0"
+      "com.raquo"    %%% "laminar"     % "17.2.0",
+      "org.scalameta" %%% "munit" % "1.0.2" % Test
     )
   )
