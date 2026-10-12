@@ -7,5 +7,6 @@ final case class CompoundDesign(
     ratio: Ratio,
     efficiency: Double,
     spacingOk: Boolean,
-    profileShiftHint: Option[ProfileShift]
+    profileShiftHint: Option[ProfileShift],
+    validity: Validity = Validity.Ok
 )

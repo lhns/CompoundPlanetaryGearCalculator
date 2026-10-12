@@ -2,6 +2,7 @@ package cpgc.web
 
 import com.raquo.laminar.api.L.*
 import com.raquo.laminar.api.L.svg as s
+import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
 import cpgc.domain.{CompoundDesign, Mode, Stage}
 import cpgc.kinematics.{BodyAngles, Kinematics}
 import cpgc.render.GearGeometry
@@ -20,12 +21,64 @@ object Schematic:
   private val Stage2Sun    = "#ff9f1c"
   private val Stage2Planet = "#73d2de"
   private val CarrierColor = "#8b949e"
+  private val CouplingColor = "#f0883e" // amber accent for novel inter-stage welds
   private val TextColor    = "#e6e6e6"
   private val SubText      = "#a6accd"
+  private val InputColor   = "#7ee787"  // green accent — input gear highlight
+  private val OutputColor  = "#58a6ff"  // blue accent — output gear highlight
+
+  /** Which body in a stage is highlighted as input/output. */
+  private enum Role:
+    case Input, Output, Plain
+
+  /** Role assignment for a topology — derived once per render. */
+  private final case class Roles(
+      stage1Sun:     Role,
+      stage1Carrier: Role,
+      stage1Ring:    Role,
+      stage2Sun:     Role,
+      stage2Ring:    Role
+  )
+
+  private def rolesFor(t: Topology, twoStage: Boolean): Roles =
+    val _ = twoStage  // intentionally unused — kept for caller-side clarity
+    // Generalised role rendering: read every present body's role from the
+    // topology directly. Fixed and Free render as Plain (the legend covers
+    // input + output only; fixed is conventionally signalled by the
+    // grounded-ring hatching, which we keep implicit).
+    def renderRole(b: Body): Role = t.roles.get(b) match
+      case Some(BodyRole.Input)  => Role.Input
+      case Some(BodyRole.Output) => Role.Output
+      case _                     => Role.Plain
+    // Carrier role: prefer C1's role, but if C1 is Plain and C2 carries a pin
+    // role (possible with independent-carrier couplings), surface C2's.
+    val carrierRole =
+      val r1 = renderRole(Body.C1)
+      if r1 != Role.Plain then r1 else renderRole(Body.C2)
+    Roles(
+      stage1Sun     = renderRole(Body.S1),
+      stage1Carrier = carrierRole,
+      stage1Ring    = renderRole(Body.R1),
+      stage2Sun     = renderRole(Body.S2),
+      stage2Ring    = renderRole(Body.R2)
+    )
+
+  private def roleStrokeColor(role: Role, fallback: String): String = role match
+    case Role.Input  => InputColor
+    case Role.Output => OutputColor
+    case Role.Plain  => fallback
+
+  private def roleStrokeWidth(role: Role, base: Double): Double = role match
+    case Role.Plain => base
+    case _          => base * 2.0
 
   def apply(
-      designSignal: Signal[Option[CompoundDesign]],
-      phaseSignal:  Signal[Double]
+      designSignal:           Signal[Option[CompoundDesign]],
+      phaseSignal:            Signal[Double],
+      topologySignal:         Signal[Topology],
+      searchStateSignal:      Signal[SearchState],
+      searchProgressSignal:   Signal[Int],
+      searchFractionSignal:   Signal[Double]
   ): SvgElement =
     s.svg(
       s.viewBox := "-220 -160 440 320",
@@ -33,10 +86,14 @@ object Schematic:
       s.height  := "100%",
       svg.preserveAspectRatio := "xMidYMid meet",
       defs(),
-      children <-- designSignal.map {
-        case Some(d) => renderDesign(d, phaseSignal)
-        case None    => Vector(placeholder())
-      }
+      children <-- designSignal
+        .combineWith(topologySignal, searchStateSignal, searchProgressSignal, searchFractionSignal)
+        .map {
+          case (Some(d), top, _,                          _, _) => renderDesign(d, phaseSignal, top)
+          case (None,    _,   SearchState.NoResults,      _, _) => Vector(placeholderNoResults())
+          case (None,    _,   SearchState.HasResults,     n, f) => Vector(placeholderSearching(n, f))
+          case (None,    _,   SearchState.Searching,      n, f) => Vector(placeholderSearching(n, f))
+        }
     )
 
   private def defs(): SvgElement =
@@ -49,49 +106,181 @@ object Schematic:
       )
     )
 
-  private def placeholder(): SvgElement =
-    s.text(
-      s.x := "0", s.y := "0",
-      s.textAnchor := "middle",
-      s.fill := SubText, s.fontSize := "14",
-      s.fontFamily := "ui-sans-serif, system-ui",
-      "Run a search to view a design"
+  /** SVG `class` attribute (Laminar's `cls` is HTML-only by default for SVG
+    * elements; we bind it explicitly here for the shimmer keyframe hook). */
+  private val svgClassAttr =
+    svg.svgAttr[String]("class", com.raquo.laminar.codecs.StringAsIsCodec, namespace = None)
+
+  /** Width of the progress-bar track in viewBox units. The track spans
+    * x ∈ [-TrackHalf, +TrackHalf], y = -12, height = 4. */
+  private val TrackHalf = 160.0
+  private val TrackY    = -12.0
+  private val TrackH    = 4.0
+
+  private def placeholderSearching(found: Int, elapsedFraction: Double): SvgElement =
+    val label =
+      if found > 0 then s"Searching designs… ($found found)"
+      else "Searching designs…"
+    val fillW = (2.0 * TrackHalf) * math.max(0.0, math.min(1.0, elapsedFraction))
+    // Unique clipPath id so the shimmer is constrained to the track.
+    val clipId = nextClipId()
+    s.g(
+      // Clip the shimmer rect to the track rectangle so it doesn't overflow
+      // when its transform slides it past the track edges.
+      s.defs(
+        svg.clipPathTag(
+          s.idAttr := clipId,
+          s.rect(
+            s.x := f"${-TrackHalf}%.1f", s.y := f"$TrackY%.1f",
+            s.width := f"${2.0 * TrackHalf}%.1f", s.height := f"$TrackH%.1f"
+          )
+        )
+      ),
+      // Track (background)
+      s.rect(
+        s.x := f"${-TrackHalf}%.1f", s.y := f"$TrackY%.1f",
+        s.width := f"${2.0 * TrackHalf}%.1f", s.height := f"$TrackH%.1f",
+        s.fill := "#30363d"
+      ),
+      // Elapsed-fraction fill
+      s.rect(
+        s.x := f"${-TrackHalf}%.1f", s.y := f"$TrackY%.1f",
+        s.width := f"$fillW%.1f", s.height := f"$TrackH%.1f",
+        s.fill := "#58a6ff", s.fillOpacity := "0.85"
+      ),
+      // Shimmer overlay (CSS-animated translate). Clipped to track.
+      s.g(
+        clipPathAttr := s"url(#$clipId)",
+        s.rect(
+          svgClassAttr := "cpgc-shimmer",
+          s.x := f"${-TrackHalf}%.1f", s.y := f"$TrackY%.1f",
+          s.width := "60", s.height := f"$TrackH%.1f",
+          s.fill := "#ffffff", s.fillOpacity := "0.35"
+        )
+      ),
+      // Count label below the bar
+      s.text(
+        s.x := "0", s.y := "20",
+        s.textAnchor := "middle",
+        s.fill := SubText, s.fontSize := "14",
+        s.fontFamily := "ui-sans-serif, system-ui",
+        label
+      )
+    )
+
+  private def placeholderNoResults(): SvgElement =
+    s.g(
+      s.text(
+        s.x := "0", s.y := "-8", s.textAnchor := "middle",
+        s.fill := TextColor, s.fontSize := "14",
+        s.fontFamily := "ui-sans-serif, system-ui",
+        "No design matches these constraints."
+      ),
+      s.text(
+        s.x := "0", s.y := "16", s.textAnchor := "middle",
+        s.fill := SubText, s.fontSize := "11",
+        s.fontFamily := "ui-sans-serif, system-ui",
+        "Try widening a tooth-count range or clearing the target ratio."
+      )
     )
 
   private def renderDesign(
       d: CompoundDesign,
-      phaseSignal: Signal[Double]
+      phaseSignal: Signal[Double],
+      topology: Topology
   ): Vector[SvgElement] =
     val twoStage = d.stage2.isDefined
     val (cx1, cx2) = if twoStage then (-110.0, 110.0) else (0.0, 0.0)
 
-    val angles: Signal[BodyAngles] = phaseSignal.map(Kinematics.at(d, _))
+    val angles: Signal[BodyAngles] = phaseSignal.map(Kinematics.at(d, _, topology))
+    val roles = rolesFor(topology, twoStage)
 
     val s1 = stageGroup(d.stage1, cx1, "Stage 1", Stage1Sun, Stage1Planet, Stage1Ring,
-                        angles, stageIndex = 1, showSun = true)
+                        angles, stageIndex = 1, showSun = true,
+                        sunRole = roles.stage1Sun,
+                        carrierRole = roles.stage1Carrier,
+                        ringRole = roles.stage1Ring)
     val s2 = d.stage2.map(st2 =>
       stageGroup(st2, cx2, "Stage 2", Stage2Sun, Stage2Planet, Stage2Ring,
-                 angles, stageIndex = 2, showSun = d.mode != Mode.NSS))
+                 angles, stageIndex = 2,
+                 showSun = topology.secondSunPresent,
+                 sunRole = roles.stage2Sun,
+                 carrierRole = Role.Plain,
+                 ringRole = roles.stage2Ring))
 
+    // Both couplings are drawn: firstCoupling on the lower label row, second
+    // on the upper one, so a compound with e.g. {CarrierToCarrier, PlanetStack}
+    // shows two stacked annotations.
     val divider =
       if twoStage then
+        couplingConnector(topology.firstCoupling,  cx1, cx2, labelY = 142) ++
+        couplingConnector(topology.secondCoupling, cx1, cx2, labelY = 132)
+      else Vector.empty
+
+    headerBanner(d) ++ s1 ++ s2.getOrElse(Vector.empty) ++ divider ++ footerInfo(d) ++ legend()
+
+  /** Visual anchor (x, y in viewBox units) of a body within a stage group
+    * centred at `cx`. Suns sit at the centre (y=0), rings at the top rim
+    * (y=-100), carriers slightly below centre (y=+40 — the carrier disc). */
+  private def bodyAnchor(b: Body, cx1: Double, cx2: Double): (Double, Double) = b match
+    case Body.S1 => (cx1, 0.0)
+    case Body.C1 => (cx1, 40.0)
+    case Body.R1 => (cx1, -100.0)
+    case Body.S2 => (cx2, 0.0)
+    case Body.C2 => (cx2, 40.0)
+    case Body.R2 => (cx2, -100.0)
+
+  /** Inter-stage coupling annotation overlaid between the two stage groups.
+    *
+    * `PlanetStack` and `CarrierToCarrier` draw the legacy "shared" centre line;
+    * every other weld draws a curved arc between the two welded bodies' visual
+    * anchor points. The label sits at `labelY` so two stacked couplings don't
+    * overlap. */
+  private def couplingConnector(
+      c: Coupling, cx1: Double, cx2: Double, labelY: Double
+  ): Vector[SvgElement] =
+    inline def label(text: String): SvgElement =
+      s.text(
+        s.x := "0", s.y := f"$labelY%.2f", s.textAnchor := "middle",
+        s.fill := CouplingColor, s.fontSize := "9",
+        s.fontFamily := "ui-monospace, monospace",
+        text
+      )
+    c match
+      case Coupling.PlanetStack =>
         Vector(
           s.line(
             s.x1 := f"${cx1 + 95}%.2f", s.y1 := "0",
             s.x2 := f"${cx2 - 95}%.2f", s.y2 := "0",
             s.stroke := CarrierColor, s.strokeOpacity := "0.55",
-            s.strokeWidth := "3", svg.strokeLineCap := "round"
+            s.strokeWidth := "3", svg.strokeLineCap := "butt"
           ),
-          s.text(
-            s.x := "0", s.y := "-6", s.textAnchor := "middle",
-            s.fill := CarrierColor, s.fontSize := "9",
-            s.fontFamily := "ui-monospace, monospace",
-            "shared carrier"
-          )
+          label("stacked planets")
         )
-      else Vector.empty
-
-    headerBanner(d) ++ s1 ++ s2.getOrElse(Vector.empty) ++ divider ++ footerInfo(d)
+      case Coupling.CarrierToCarrier =>
+        Vector(
+          s.line(
+            s.x1 := f"${cx1 + 95}%.2f", s.y1 := "0",
+            s.x2 := f"${cx2 - 95}%.2f", s.y2 := "0",
+            s.stroke := CarrierColor, s.strokeOpacity := "0.55",
+            s.strokeWidth := "3", svg.strokeLineCap := "butt"
+          ),
+          label("shared carrier")
+        )
+      case other =>
+        // Curved arc between the two welded bodies' anchor points.
+        val (ba, bb) = Coupling.bodyPair(other).getOrElse((Body.R1, Body.S2))
+        val (ax, ay) = bodyAnchor(ba, cx1, cx2)
+        val (bx, by) = bodyAnchor(bb, cx1, cx2)
+        Vector(
+          s.path(
+            s.d := f"M $ax%.1f $ay%.1f Q 0 ${math.min(ay, by) - 30}%.1f $bx%.1f $by%.1f",
+            s.fill := "none", s.stroke := CouplingColor,
+            s.strokeWidth := "2.5", svg.strokeLineCap := "butt",
+            s.strokeOpacity := "0.85"
+          ),
+          label(Coupling.label(other))
+        )
 
   private def headerBanner(d: CompoundDesign): Vector[SvgElement] =
     val title = d.mode match
@@ -110,8 +299,29 @@ object Schematic:
         s.x := "0", s.y := "-122", s.textAnchor := "middle",
         s.fill := SubText, s.fontSize := "11",
         s.fontFamily := "ui-monospace, monospace",
-        f"ratio ${d.ratio.value}%.3f : 1     η ${d.efficiency * 100}%.1f%%     N=${d.stage1.set.numPlanets}"
+        {
+          val r = d.ratio.value
+          val sign = if r < 0 then "−" else ""
+          val arrow = if r < 0 then " ↺" else ""
+          f"ratio $sign${math.abs(r)}%.3f : 1$arrow     η ${d.efficiency * 100}%.1f%%     N=${d.stage1.set.numPlanets}"
+        }
       )
+    )
+
+  /** Tiny colour-keyed legend in the bottom-left of the schematic. */
+  private def legend(): Vector[SvgElement] =
+    val baseX = -210.0
+    val baseY = 148.0
+    def dot(x: Double, color: String): SvgElement =
+      s.circle(s.cx := f"$x%.2f", s.cy := f"$baseY%.2f",
+               s.r := "3", s.fill := color)
+    def text(x: Double, content: String): SvgElement =
+      s.text(s.x := f"$x%.2f", s.y := f"${baseY + 3}%.2f",
+             s.fill := SubText, s.fontSize := "9",
+             s.fontFamily := "ui-monospace, monospace", content)
+    Vector(
+      dot(baseX,         InputColor),  text(baseX + 6, "input"),
+      dot(baseX + 40,    OutputColor), text(baseX + 46, "output")
     )
 
   private def footerInfo(d: CompoundDesign): Vector[SvgElement] =
@@ -156,6 +366,7 @@ object Schematic:
   /** SVG `clip-path` attribute (not exposed by Laminar's default svg bindings). */
   private val clipPathAttr =
     svg.svgAttr[String]("clip-path", com.raquo.laminar.codecs.StringAsIsCodec, namespace = None)
+
 
   /** External involute gear (sun, planet). Polygon traces tip → right flank
     * (involute) → trough at root → next tooth, around the full circumference.
@@ -359,15 +570,20 @@ object Schematic:
       ringColor: String,
       angles: Signal[BodyAngles],
       stageIndex: Int,
-      showSun: Boolean
+      showSun: Boolean,
+      sunRole: Role,
+      carrierRole: Role,
+      ringRole: Role,
   ): Vector[SvgElement] =
     val targetOuterR = 95.0
     val rawOuterR    = stage.ringOuterDiameter / 2.0
     val scale        = targetOuterR / rawOuterR
     val px           = (x: Double) => x * scale
 
-    val mPx       = px(stage.module.value)
-    val sunPitchR = mPx * stage.set.sun.toDouble / 2.0
+    val mPx          = px(stage.module.value)
+    val sunPitchR    = mPx * stage.set.sun.toDouble / 2.0
+    val planetPitchR = mPx * stage.set.planet.toDouble / 2.0
+    val ringPitchR   = mPx * stage.set.ring.toDouble / 2.0
     // Ring's outer rim flush with the polygon's back-of-tooth (dedendum).
     val ringOR    = mPx * stage.set.ring.toDouble / 2.0 + 1.25 * mPx
     val carrierR  = px(stage.centerToCenter)
@@ -381,6 +597,20 @@ object Schematic:
     val ringSig: Signal[Double] = angles.map(b =>
       if stageIndex == 1 then b.ring1 else b.ring2)
 
+    val ringStroke   = roleStrokeColor(ringRole, ringColor)
+    val ringStrokeW  = roleStrokeWidth(ringRole, 2.0)
+    val sunStroke    = roleStrokeColor(sunRole, sunColor)
+
+    // Dashed pitch circle
+    def pitchCircle(centerX: Double, centerY: Double, radius: Double): SvgElement =
+      s.circle(
+        s.cx := f"$centerX%.2f", s.cy := f"$centerY%.2f",
+        s.r := f"$radius%.2f",
+        s.fill := "none", s.stroke := SubText, s.strokeWidth := "0.8",
+        svg.strokeDashArray := "2.5 2.5", svg.strokeLineCap := "butt",
+        s.strokeOpacity := "0.7"
+      )
+
     // Ring: rotates about stage center.
     val ringEl = s.g(
       svg.transform <-- ringSig.map(rotateXform(_, cx, 0)),
@@ -388,18 +618,38 @@ object Schematic:
       s.circle(
         s.cx := f"$cx%.2f", s.cy := "0",
         s.r := f"$ringOR%.2f",
-        s.fill := "none", s.stroke := ringColor, s.strokeWidth := "2"
+        s.fill := "none", s.stroke := ringStroke, s.strokeWidth := f"$ringStrokeW%.2f"
       ),
+      // Inner pitch circle (faint)
+      pitchCircle(cx, 0, ringPitchR),
       // Involute inner tooth profile — static phase offset so planet-ring mesh
       // satisfies the internal-mesh phase relation `f_r − f_p_outward ≡ 0.5`.
       involuteRing(
-        cx, 0, stage.set.ring.toInt, mPx, ringColor,
+        cx, 0, stage.set.ring.toInt, mPx, ringStroke,
         rotateRad = ringPhaseOffset(
           stage.set.sun.toInt, stage.set.planet.toInt, stage.set.ring.toInt,
           -math.Pi / 2.0
         )
       )
     )
+
+    // Role badge (IN / OUT) for the gear at (px, py), in role's colour.
+    def roleBadge(role: Role, x: Double, y: Double): SvgElement = role match
+      case Role.Input  =>
+        s.text(s.x := f"$x%.2f", s.y := f"$y%.2f", s.textAnchor := "middle",
+               s.fill := InputColor, s.fontSize := "8",
+               s.fontWeight := "700",
+               s.fontFamily := "ui-monospace, monospace",
+               s.pointerEvents := "none",
+               "IN")
+      case Role.Output =>
+        s.text(s.x := f"$x%.2f", s.y := f"$y%.2f", s.textAnchor := "middle",
+               s.fill := OutputColor, s.fontSize := "8",
+               s.fontWeight := "700",
+               s.fontFamily := "ui-monospace, monospace",
+               s.pointerEvents := "none",
+               "OUT")
+      case Role.Plain  => s.g()
 
     // Sun: rotates about stage center.
     val sunEl =
@@ -411,21 +661,51 @@ object Schematic:
           s.r := f"${(sunPitchR + mPx) * 1.35}%.2f",
           s.fill := "url(#sun-glow)"
         ),
-        involuteToothedGear(cx, 0, stage.set.sun.toInt, mPx, sunColor),
-        s.circle(s.cx := f"$cx%.2f", s.cy := "0", s.r := "2.4",
-                 s.fill := "#0d1117", s.stroke := sunColor, s.strokeWidth := "0.8")
+        pitchCircle(cx, 0, sunPitchR),
+        involuteToothedGear(cx, 0, stage.set.sun.toInt, mPx, sunStroke),
+        {
+          val sunHubR = sunRole match
+            case Role.Plain => 2.4
+            case _          => 3.4
+          val sunHubW = sunRole match
+            case Role.Plain => 0.8
+            case _          => 2.0
+          s.circle(s.cx := f"$cx%.2f", s.cy := "0", s.r := f"$sunHubR%.2f",
+                   s.fill := "#0d1117", s.stroke := sunStroke,
+                   s.strokeWidth := f"$sunHubW%.2f")
+        }
       )
+
+    // Ring-level static IN/OUT badge near the ring rim (placed outside the
+    // rotating ring group so the badge text stays upright).
+    val ringRoleBadge = ringRole match
+      case Role.Plain => s.g()
+      case _          => roleBadge(ringRole, cx, -ringOR - 4)
+
+    // Sun-level static IN/OUT badge at the centre (offset slightly above the
+    // sun pin so the rotating sun doesn't sweep over it).
+    val sunRoleBadge = sunRole match
+      case Role.Plain         => s.g()
+      case _ if !showSun      => s.g()
+      case _                  => roleBadge(sunRole, cx, -sunPitchR - mPx * 1.6)
 
     // Carrier: outer <g> rotates about stage center; planets sit inside at static
     // angles, with their own inner <g> handling per-planet spin in the carrier frame.
+    val carrierStroke = roleStrokeColor(carrierRole, CarrierColor)
+    val carrierStrokeW = roleStrokeWidth(carrierRole, 1.2)
+    val carrierOpacity = carrierRole match
+      case Role.Plain => "0.7"
+      case _          => "1.0"
     val carrierG = s.g(
       svg.transform <-- carrierSig.map(rotateXform(_, cx, 0)),
       // Carrier circle (rotationally symmetric, but inside this group anyway)
       s.circle(
         s.cx := f"$cx%.2f", s.cy := "0",
         s.r := f"$carrierR%.2f",
-        s.fill := "none", s.stroke := CarrierColor, s.strokeWidth := "0.8",
-        svg.strokeDashArray := "3 3", s.strokeOpacity := "0.7"
+        s.fill := "none", s.stroke := carrierStroke,
+        s.strokeWidth := f"$carrierStrokeW%.2f",
+        svg.strokeDashArray := "3 3", svg.strokeLineCap := "butt",
+        s.strokeOpacity := carrierOpacity
       ),
       (0 until n).flatMap { i =>
         val theta = 2.0 * math.Pi * i / n - math.Pi / 2.0
@@ -435,13 +715,14 @@ object Schematic:
         val spoke = s.line(
           s.x1 := f"$cx%.2f", s.y1 := "0",
           s.x2 := f"$pxC%.2f", s.y2 := f"$pyC%.2f",
-          s.stroke := CarrierColor, s.strokeOpacity := "0.35", s.strokeWidth := "1.2"
+          s.stroke := carrierStroke, s.strokeOpacity := "0.35", s.strokeWidth := "1.2"
         )
         // Planet body: spin relative to the carrier frame
         val planet = s.g(
           svg.transform <-- planetSpinSig.combineWith(carrierSig).map { (ps, c) =>
             rotateXform(ps - c, pxC, pyC)
           },
+          pitchCircle(pxC, pyC, planetPitchR),
           involuteToothedGear(pxC, pyC, stage.set.planet.toInt, mPx, planetColor,
             rotateRad = theta + planetPhaseOffset(stage.set.sun.toInt, stage.set.planet.toInt, theta)),
           s.circle(s.cx := f"$pxC%.2f", s.cy := f"$pyC%.2f", s.r := "1.6",
@@ -451,11 +732,19 @@ object Schematic:
       }
     )
 
+    // Carrier-level IN badge at the bottom of the carrier circle.
+    val carrierRoleBadge = carrierRole match
+      case Role.Plain => s.g()
+      case _          => roleBadge(carrierRole, cx, carrierR + 9)
+
+    val labelText =
+      val pr = s"P${stage.set.planet.toInt} R${stage.set.ring.toInt}"
+      if showSun then s"$label · S${stage.set.sun.toInt} $pr" else s"$label · $pr"
     val labelEl = s.text(
       s.x := f"$cx%.2f", s.y := f"${ringOR + 16}%.2f", s.textAnchor := "middle",
       s.fill := SubText, s.fontSize := "11", s.fontFamily := "ui-monospace, monospace",
-      s"$label · S${stage.set.sun.toInt} P${stage.set.planet.toInt} R${stage.set.ring.toInt}"
+      labelText
     )
 
-    Vector(ringEl, carrierG, sunEl, labelEl)
+    Vector(ringEl, carrierG, sunEl, ringRoleBadge, sunRoleBadge, carrierRoleBadge, labelEl)
 

@@ -1,94 +1,84 @@
 package cpgc.kinematics
 
-import cpgc.domain.{CompoundDesign, Mode}
+import cpgc.constraints.Topology
+import cpgc.domain.{CompoundDesign, GearSet, Mode}
+import cpgc.search.RoleSolver
 
 /** Angles of every rotating body in a `CompoundDesign`, in radians, at a given
   * input phase. Values are full radians (not mod 2π) so consumers can interpolate
   * smoothly across revolutions.
   *
-  *   - `sun1`, `sun2`: body rotation of the sun gears.
-  *   - `carrier`: shared carrier angle.
+  *   - `sun1`, `sun2`: body rotation of the sun gears (0 if Absent / not present).
+  *   - `carrier1`, `carrier2`: per-stage carrier angle. Equal for the classic
+  *     shared-carrier compound (`CarrierToCarrier`); distinct for independent-
+  *     carrier compounds.
   *   - `planet1Spin`, `planet2Spin`: world-frame body spin of each planet (not orbit).
   *   - `ring1`, `ring2`: body rotation of the ring gears (0 when grounded).
   */
 final case class BodyAngles(
     sun1: Double,
-    carrier: Double,
+    carrier1: Double,
     planet1Spin: Double,
     ring1: Double,
     sun2: Double,
+    carrier2: Double,
     planet2Spin: Double,
     ring2: Double
-)
+):
+  /** Legacy accessor — most consumers want stage 1's carrier. */
+  def carrier: Double = carrier1
 
 object Kinematics:
 
   /** Body angles as a function of the input phase φ (radians).
     *
-    * For Standard/NSS, φ drives sun 1; for SingleStage, φ drives sun 1 (output is
-    * the carrier); for CDCP, φ drives the carrier (input is the carrier).
+    * Delegates to [[RoleSolver.velocities]] which solves the small linear
+    * system (Willis per stage + planet coupling + Input/Fixed pins) uniformly
+    * across every supported topology. The planet angular velocities ωP are
+    * recovered from each stage's sun-planet mesh:
     *
-    * Derivation (teeth-units, ring 1 grounded for all non-CDCP modes):
+    *   ωP = ωC − (ωS − ωC) · Ts / Tp
     *
-    *   sun-mesh:       (ω_sun − ω_c) · Ts = −(ω_p − ω_c) · Tp
-    *   ring-mesh:       ω_r · Tr      =  ω_c · (Tr − Tp) + ω_p · Tp
-    *
-    *   ⇒ ω_c   = ω_sun · Ts / (Ts + Tr)
-    *   ⇒ ω_p1  = −ω_c · (Tr1 − Tp1) / Tp1     (ring 1 fixed)
-    *   ⇒ ω_r2  = (ω_c · (Tr2 − Tp2) + ω_p2 · Tp2) / Tr2
-    *
-    * Planets are rigidly coupled on a shared shaft: ω_p2 = ω_p1.
+    * For NSS (S2 absent), ωP2 equals ωP1 because the planets are rigidly
+    * coupled on the shared shaft. For single-stage, ωP2 = ωP1 = ωP.
     */
-  def at(d: CompoundDesign, phi: Double): BodyAngles = d.mode match
-    case Mode.SingleStage =>
-      val ts = d.stage1.set.sun.toDouble
-      val tp = d.stage1.set.planet.toDouble
-      val tr = d.stage1.set.ring.toDouble
-      val sun1    = phi
-      val carrier = phi * ts / (ts + tr)
-      val pSpin   = -carrier * (tr - tp) / tp
-      BodyAngles(sun1, carrier, pSpin, 0.0, 0.0, pSpin, 0.0)
+  def at(d: CompoundDesign, phi: Double): BodyAngles =
+    at(d, phi, Topology.fromMode(d.mode))
 
-    case Mode.Standard | Mode.NSS =>
-      val ts1 = d.stage1.set.sun.toDouble
-      val tp1 = d.stage1.set.planet.toDouble
-      val tr1 = d.stage1.set.ring.toDouble
-      val sun1    = phi
-      val carrier = phi * ts1 / (ts1 + tr1)
-      val pSpin   = -carrier * (tr1 - tp1) / tp1
-      val (sun2, ring2) = d.stage2 match
-        case None => (0.0, 0.0)
-        case Some(st2) =>
-          val ts2 = st2.set.sun.toDouble
-          val tp2 = st2.set.planet.toDouble
-          val tr2 = st2.set.ring.toDouble
-          val ring2Angle = (carrier * (tr2 - tp2) + pSpin * tp2) / tr2
-          val sun2Angle  =
-            if d.mode == Mode.NSS then 0.0
-            else carrier - (pSpin - carrier) * tp2 / ts2
-          (sun2Angle, ring2Angle)
-      BodyAngles(sun1, carrier, pSpin, 0.0, sun2, pSpin, ring2)
+  /** Render-time variant: use an explicit topology rather than the design's
+    * legacy `Mode`. Lets the schematic preview novel role assignments even
+    * while the search still routes through the legacy-mode fallback. */
+  def at(d: CompoundDesign, phi: Double, topology: Topology): BodyAngles =
+    val stage2GearSet = d.stage2.map(_.set)
+    RoleSolver.velocities(topology, d.stage1.set, stage2GearSet, omegaIn = phi) match
+      case Some(v) =>
+        val omegaP1 = planetVelocity(d.stage1.set, v.omegaS1, v.omegaC1)
+        val omegaP2 = stage2GearSet match
+          case Some(s2) if topology.s2Present => planetVelocity(s2, v.omegaS2, v.omegaC2OrC1)
+          case _                              => omegaP1  // NSS or single — planets coupled
+        BodyAngles(
+          sun1        = v.omegaS1,
+          carrier1    = v.omegaC1,
+          planet1Spin = omegaP1,
+          ring1       = v.omegaR1,
+          sun2        = if topology.s2Present then v.omegaS2 else 0.0,
+          carrier2    = v.omegaC2OrC1,
+          planet2Spin = omegaP2,
+          ring2       = v.omegaR2
+        )
+      case None =>
+        // Linear system singular at these tooth counts — shouldn't happen for
+        // designs the search produced, but keep the rendering animation alive.
+        BodyAngles(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
-    case Mode.CDCP =>
-      val carrier = phi
-      val ts1 = d.stage1.set.sun.toDouble
-      val tp1 = d.stage1.set.planet.toDouble
-      val tr1 = d.stage1.set.ring.toDouble
-      val pSpin = -carrier * (tr1 - tp1) / tp1
-      // Sun 1 derived from sun mesh: (ω_s1 − ω_c)·Ts1 = −(ω_p − ω_c)·Tp1
-      val sun1  = carrier + (carrier - pSpin) * tp1 / ts1
-      val (sun2, ring2) = d.stage2 match
-        case None => (0.0, 0.0)
-        case Some(st2) =>
-          val ts2 = st2.set.sun.toDouble
-          val tp2 = st2.set.planet.toDouble
-          val tr2 = st2.set.ring.toDouble
-          val ring2Angle = (carrier * (tr2 - tp2) + pSpin * tp2) / tr2
-          val sun2Angle  = carrier + (carrier - pSpin) * tp2 / ts2
-          (sun2Angle, ring2Angle)
-      BodyAngles(sun1, carrier, pSpin, 0.0, sun2, pSpin, ring2)
+  /** Recover ωP from a sun-bearing stage's external mesh:
+    *   (ωS − ωC) · Ts + (ωP − ωC) · Tp = 0
+    *   ⇒ ωP = ωC − (ωS − ωC) · Ts / Tp
+    */
+  private def planetVelocity(s: GearSet, omegaSun: Double, omegaC: Double): Double =
+    omegaC - (omegaSun - omegaC) * s.sun.toDouble / s.planet.toDouble
 
-  /** Return the input and output body angles per the mode topology. */
+  /** Return the input and output body angles per the design's topology. */
   def io(d: CompoundDesign, b: BodyAngles): (Double, Double) = d.mode match
     case Mode.SingleStage          => (b.sun1, b.carrier)
     case Mode.Standard | Mode.NSS  => (b.sun1, b.ring2)

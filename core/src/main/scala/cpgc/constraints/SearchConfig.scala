@@ -18,5 +18,11 @@ final case class SearchConfig(
     sunPlanetFactor: Double = 3.0,
     targets: Seq[Ratio] = Seq.empty,
     topPerTarget: Int = 10,
-    tolerance: Double = 1e-9
-)
+    tolerance: Double = 1e-9,
+    /** Generalised role assignment. Defaults to the legacy mode's canonical
+      * topology; novel tuples are supplied by callers that have access to
+      * the user-chosen role layout. */
+    topology: Option[Topology] = None
+):
+  /** Effective topology: explicit `topology` if set, else derived from `mode`. */
+  def effectiveTopology: Topology = topology.getOrElse(Topology.fromMode(mode))
