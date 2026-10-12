@@ -40,6 +40,9 @@ import munit.FunSuite
   * values inform the next move on the filter rewrite.
   */
 class SpacingExperimentSpec extends FunSuite:
+  override def munitTestTransforms = super.munitTestTransforms ++ List(
+    new TestTransform("diagnostic", t => t.withTags(t.tags + munit.Tag("diagnostic")))
+  )
 
   private val twoPi     = 2.0 * math.Pi
   private val baseOrbit = -math.Pi / 2.0
