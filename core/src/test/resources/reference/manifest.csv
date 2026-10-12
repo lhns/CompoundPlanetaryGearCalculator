@@ -1,0 +1,17 @@
+file,mode,bounds,N,MinTeeth,MaxTeeth,MaxSunTeeth,MinRingTeeth,MaxRingTeeth,MinModule,SunPlanetFactor,SetOD
+standard_A_N3.csv,Standard,A,3,8,14,20,30,50,1.0,3,150
+standard_A_N4.csv,Standard,A,4,8,14,20,30,50,1.0,3,150
+standard_B_N3.csv,Standard,B,3,8,14,22,36,56,2.0,1.2,150
+standard_B_N4.csv,Standard,B,4,8,14,22,36,56,2.0,1.2,150
+nss_A_N3.csv,NSS,A,3,8,14,20,30,50,1.0,3,150
+nss_A_N4.csv,NSS,A,4,8,14,20,30,50,1.0,3,150
+nss_B_N3.csv,NSS,B,3,8,14,22,36,56,2.0,1.2,150
+nss_B_N4.csv,NSS,B,4,8,14,22,36,56,2.0,1.2,150
+nssfix_A_N3.csv,NSSFIX,A,3,8,14,20,30,50,1.0,3,150
+nssfix_A_N4.csv,NSSFIX,A,4,8,14,20,30,50,1.0,3,150
+nssfix_B_N3.csv,NSSFIX,B,3,8,14,22,36,56,2.0,1.2,150
+nssfix_B_N4.csv,NSSFIX,B,4,8,14,22,36,56,2.0,1.2,150
+cdcp_A_N3.csv,CDCP,A,3,8,14,20,30,50,1.0,3,150
+cdcp_A_N4.csv,CDCP,A,4,8,14,20,30,50,1.0,3,150
+cdcp_B_N3.csv,CDCP,B,3,8,14,22,36,56,2.0,1.2,150
+cdcp_B_N4.csv,CDCP,B,4,8,14,22,36,56,2.0,1.2,150
