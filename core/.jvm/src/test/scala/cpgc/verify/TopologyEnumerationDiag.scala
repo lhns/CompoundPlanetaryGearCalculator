@@ -20,6 +20,7 @@ import java.nio.file.{Files, Paths}
   * in the generated document.
   */
 class TopologyEnumerationDiag extends FunSuite:
+  private val diagnostic = munit.Tag("diagnostic")
 
   // ── Sample gear pairs ──────────────────────────────────────────────────────
   // Three distinct, even-spaced samples with matching planet counts (so the
@@ -467,7 +468,7 @@ class TopologyEnumerationDiag extends FunSuite:
     sb.result()
 
   // ── The diagnostic test ────────────────────────────────────────────────────
-  test("DIAG: enumerate the full topology design space → docs/topology-enumeration.md") {
+  test("DIAG: enumerate the full topology design space → docs/topology-enumeration.md".tag(diagnostic)) {
     val rows = enumerateAll()
     val doc = buildDoc(rows)
     val csv = buildCsv(rows)
