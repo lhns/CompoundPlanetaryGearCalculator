@@ -176,6 +176,51 @@ class Scene3DSpec extends FunSuite:
     assertEqualsDouble(o.distance, 100.0, 1e-9)
     assertEqualsDouble(o.target._1, tx, 1e-12)
 
+  // -- Camera fit ------------------------------------------------------------
+
+  private val fov = math.toRadians(35.0)
+
+  private def single = CompoundDesign(stage(25, 11, 3), None, Topology.singleStage, Ratio(3.0), 0.9)
+
+  test("bounding radius covers the ring cylinder over the full axial span, two stages and one"):
+    for d <- Seq(design(Topology.ravigneaux), single) do
+      val l = lay(d)
+      assertEqualsDouble(boundingRadius(l), math.hypot(l.outerRadius, (l.zMax - l.zMin) / 2.0), eps)
+      assert(boundingRadius(l) > l.outerRadius)
+    val (two, one) = (lay(design(Topology.ravigneaux, stage(25, 11, 3), stage(25, 11, 3))), lay(single))
+    assert(boundingRadius(two) > boundingRadius(one)) // same ring size: the second stage adds depth
+
+  test("no extruded solid leaves the bounding sphere, including a single stage"):
+    for d <- Seq(design(Topology.ravigneaux), design(Topology.standardCompound), single) do
+      val l = lay(d); val zc = (l.zMin + l.zMax) / 2.0; val r = boundingRadius(l)
+      for e <- extruded(l); (x, y) <- e.outline; z <- Seq(e.z0, e.z1) do
+        assert(math.sqrt(x * x + y * y + (z - zc) * (z - zc)) <= r + eps)
+
+  test("fit distance uses the narrower field: vertical for wide canvases, horizontal for tall ones"):
+    val r = 100.0
+    val wide = fitDistance(r, fov, 2.0, 1.0)
+    assertEqualsDouble(wide, r / math.sin(fov / 2.0), 1e-9)
+    val tall = fitDistance(r, fov, 0.5, 1.0)
+    assertEqualsDouble(tall, r / math.sin(math.atan(0.5 * math.tan(fov / 2.0))), 1e-9)
+    assert(tall > wide)
+    assertEqualsDouble(fitDistance(r, fov, 1.0, 1.15), 1.15 * fitDistance(r, fov, 1.0, 1.0), 1e-9)
+
+  test("at the fit distance the sphere's silhouette lies inside both half-angles with margin"):
+    for aspect <- Seq(0.4, 1.0, 1.6, 3.0) do
+      val r = 80.0; val d = fitDistance(r, fov, aspect)
+      val half = math.asin(r / d)
+      assert(half < fov / 2.0 && math.tan(half) < aspect * math.tan(fov / 2.0), s"aspect $aspect")
+
+  test("refit snaps to the new home but keeps the orbit angles; rehome keeps the zoom ratio"):
+    val o = new OrbitState(OrbitState.Home((0, 0, 0), 100.0))
+    o.orbit(30, 10); o.zoomBy(0.5)
+    val (yaw, pitch) = (o.yaw, o.pitch)
+    o.rehome(OrbitState.Home((0, 0, 5), 200.0))
+    assertEqualsDouble(o.distance, 100.0, eps)
+    o.refit(OrbitState.Home((0, 0, 9), 300.0))
+    assertEqualsDouble(o.distance, 300.0, eps); assertEquals(o.target, (0.0, 0.0, 9.0))
+    assertEqualsDouble(o.yaw, yaw, eps); assertEqualsDouble(o.pitch, pitch, eps)
+
   // ── URL ──────────────────────────────────────────────────────────────────
 
   test("view round-trips through the URL; the schematic is the default and is omitted"):
