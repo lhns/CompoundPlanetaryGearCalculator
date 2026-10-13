@@ -21,8 +21,15 @@ object Results:
       searchState: Var[SearchState],
       searchProgress: Var[Int]
   ): HtmlElement =
-    val displayCount = Var(10)
+    val pageSize = Var[Option[Int]](Some(10))
+    val pageVar  = Var(0)
+    val pageNow  = () => Paging.clamp(pageVar.now(), resultsVar.now().size, pageSize.now())
+    // A new search or a re-rank replaces the results: back to page 1.
+    val resetPage = resultsVar.signal --> Observer[Vector[CompoundDesign]](_ => pageVar.set(0))
+    val clampedPage: Signal[Int] = pageVar.signal.combineWith(resultsVar.signal, pageSize.signal)
+      .map((p, ds, s) => Paging.clamp(p, ds.size, s))
     div(cls := "panel results-panel",
+      resetPage,
       div(cls := "panel-header",
         span(cls := "panel-title", "Results"),
         div(cls := "sort-pills", roleAttr := "group", ariaLabel := "Sort results by",
@@ -37,40 +44,63 @@ object Results:
           scadButton(selectedVar)
         )
       ),
-      resultsTable(resultsVar.signal, selectedVar, displayCount.signal),
+      resultsTable(resultsVar.signal, selectedVar, pageSize.signal, clampedPage),
       div(cls := "show-more-row",
         span(cls := "panel-sub", roleAttr := "status",
           child.text <-- resultsVar.signal
-            .combineWith(displayCount.signal, statusVar.signal, searchState.signal, searchProgress.signal)
-            .map { (ds, n, status, state, progress) =>
+            .combineWith(clampedPage, pageSize.signal, statusVar.signal, searchState.signal, searchProgress.signal)
+            .map { (ds, page, size, status, state, progress) =>
               state match
                 case SearchState.Searching => s"Searching… $progress found"
                 case SearchState.Invalid   => "Fix the input error to search."
                 case _ =>
-                  val shown = math.min(n, ds.size)
-                  val countText = s"Showing $shown of ${ds.size}"
+                  val countText = Paging.label(page, ds.size, size)
                   if status.isEmpty then countText else s"$countText  ·  $status"
             }
         ),
         div(cls := "show-more-right",
+          pager(resultsVar.signal, clampedPage, pageSize.signal, pageVar, pageNow),
           label(cls := "rows-label", forId := "rows-select", "Rows"),
           select(cls := "rows-select", idAttr := "rows-select",
             onChange.mapToValue --> Observer[String] { v =>
-              if v == "all" then displayCount.set(resultsVar.now().size.max(1))
-              else v.toIntOption.foreach(n => displayCount.set(n.max(1)))
+              val newSize = if v == "all" then None else v.toIntOption.map(_.max(1))
+              if v == "all" || newSize.isDefined then
+                pageVar.set(Paging.pageForSizeChange(pageNow(), resultsVar.now().size, pageSize.now(), newSize))
+                pageSize.set(newSize)
             },
-            List(10, 20, 50, 100, 200).map { n =>
+            RowChoices.map { n =>
               option(value := n.toString,
-                     selected <-- displayCount.signal.map(_ == n),
+                     selected <-- pageSize.signal.map(_.contains(n)),
                      n.toString)
             },
-            option(value := "all",
-                   selected <-- displayCount.signal.combineWith(resultsVar.signal)
-                                  .map { (n, ds) => ds.nonEmpty && n >= ds.size && !Set(10,20,50,100,200).contains(n) },
-                   "All")
+            option(value := "all", selected <-- pageSize.signal.map(_.isEmpty), "All")
           )
         )
       )
+    )
+
+  private val RowChoices = List(10, 20, 50, 100, 200)
+
+  /** First / previous / next / last buttons; hidden when there is a single page. */
+  private def pager(
+      results: Signal[Vector[CompoundDesign]], page: Signal[Int], size: Signal[Option[Int]],
+      pageVar: Var[Int], pageNow: () => Int
+  ): HtmlElement =
+    val pages: Signal[Int] = results.combineWith(size).map((ds, s) => Paging.pageCount(ds.size, s))
+    def nav(glyph: String, name: String, isOff: Signal[Boolean], target: () => Int): HtmlElement =
+      button(cls := "page-btn", typ := "button", ariaLabel := name, titleAttr := name, glyph,
+        disabled <-- isOff,
+        onClick.preventDefault --> { _ => pageVar.set(target()) })
+    val atStart = page.map(_ <= 0)
+    val atEnd   = page.combineWith(pages).map((p, n) => p >= n - 1)
+    div(cls := "pager", roleAttr := "group", ariaLabel := "Results pages",
+      hidden <-- pages.map(_ <= 1),
+      nav("«", "First page", atStart, () => 0),
+      nav("‹", "Previous page", atStart, () => pageNow() - 1),
+      span(cls := "page-indicator", aria.live := "polite",
+        child.text <-- page.combineWith(pages).map((p, n) => s"Page ${p + 1} of $n")),
+      nav("›", "Next page", atEnd, () => pageNow() + 1),
+      nav("»", "Last page", atEnd, () => Int.MaxValue)
     )
 
   // ── Export helpers ─────────────────────────────────────────────────────────
@@ -146,7 +176,8 @@ object Results:
   private def resultsTable(
       designs: Signal[Vector[CompoundDesign]],
       selected: Var[Option[CompoundDesign]],
-      displayCount: Signal[Int]
+      size: Signal[Option[Int]],
+      page: Signal[Int]
   ): HtmlElement =
     div(cls := "table-wrap",
       table(
@@ -164,8 +195,9 @@ object Results:
           th(titleAttr := "Stage 2 ring gear tooth count.", "R₂"),
           th(titleAttr := "Stage 2 module (mm per tooth).", "m₂")
         )),
-        tbody(children <-- designs.combineWith(displayCount).map { (ds, n) =>
-          ds.take(n).map { d =>
+        tbody(children <-- designs.combineWith(size, page).map { (ds, s, p) =>
+          val (from, until) = Paging.range(p, ds.size, s)
+          ds.slice(from, until).map { d =>
             tr(
               cls := "row",
               tabIndex := 0,
