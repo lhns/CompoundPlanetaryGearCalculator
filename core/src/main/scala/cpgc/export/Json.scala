@@ -13,7 +13,17 @@ object Json:
     s"""{"mode":"${d.modeName}","ratio":${fmt(d.ratio.value)},""" +
       s""""efficiency":${fmt(d.efficiency)},"spacingOk":${d.spacingOk},""" +
       s""""planets":${d.stage1.set.numPlanets},""" +
-      s""""stage1":${stageJson(d.stage1, d.topology.s1Present)},"stage2":$stage2}"""
+      s""""stage1":${stageJson(d.stage1, d.topology.s1Present)},"stage2":$stage2,""" +
+      s""""topology":${topologyJson(d)}}"""
+
+  private def topologyJson(d: CompoundDesign): String =
+    val t = d.topology
+    def str(o: Option[String]) = o.fold("null")(s => s""""$s"""")
+    s"""{"modeName":"${d.modeName}","input":"${TopologyInfo.input(t)}",""" +
+      s""""output":"${TopologyInfo.output(t)}","fixed":"${TopologyInfo.fixed(t)}",""" +
+      s""""firstCoupling":${str(TopologyInfo.firstCoupling(t))},""" +
+      s""""secondCoupling":${str(TopologyInfo.secondCoupling(t))},""" +
+      s""""absentSuns":${TopologyInfo.absentSuns(t).map(b => s""""$b"""").mkString("[", ",", "]")}}"""
 
   /** `"sun":null` for a sun-less stage. */
   private def stageJson(s: Stage, sunPresent: Boolean): String =
@@ -21,6 +31,4 @@ object Json:
     s"""{"sun":$sun,"planet":${s.set.planet.toInt},""" +
       s""""ring":${s.set.ring.toInt},"module":${fmt(s.module.value)}}"""
 
-  private def fmt(d: Double): String =
-    if d.isNaN || d.isInfinite then "null"
-    else Numeric.fixed(d, 6)
+  private def fmt(d: Double): String = Numeric.jsonNumber(d, 6)

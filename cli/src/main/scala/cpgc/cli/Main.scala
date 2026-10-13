@@ -8,6 +8,8 @@ import cpgc.constraints.{SearchConfig, TeethBounds, Topology}
 import cpgc.domain.{Mode, Ratio}
 import cpgc.`export`.{Csv, Json, OpenScad, Pretty}
 
+import java.io.{FileDescriptor, FileOutputStream, PrintStream}
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 object Main extends CommandApp(
@@ -143,9 +145,11 @@ object Search:
         val best = Calculator.best(cfg)
         cfg.targets.flatMap(t => best.getOrElse(t, Vector.empty).map(_.design)).toVector
 
+    // The table uses box-drawing characters; the JVM's default stdout charset on Windows is a legacy code page.
+    val out = new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8)
     if !run.noTable then
-      if designs.isEmpty then println("No designs satisfied the constraints.")
-      else println(Pretty.table(designs))
+      if designs.isEmpty then out.println("No designs satisfied the constraints.")
+      else out.println(Pretty.table(designs))
 
     run.csv.foreach(p => Files.writeString(p, Csv.render(designs)))
     run.json.foreach(p => Files.writeString(p, Json.render(designs)))
