@@ -66,6 +66,7 @@ lazy val web = (project in file("web"))
   .settings(
     name := "cpgc-web",
     scalaJSUseMainModuleInitializer := true,
+    scalacOptions += "-Wconf:src=.*three/Three[.]scala:s", // facade constructor parameters look unused
     scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.NoModule)),
     webDist := {
       (Compile / fullLinkJS).value

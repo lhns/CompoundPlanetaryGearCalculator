@@ -5,6 +5,7 @@ import scala.scalajs.js
 import scala.scalajs.js.annotation.JSGlobal
 
 /** Minimal facades for the part of three.js r158 (global build, `window.THREE`) the 3D view uses. */
+// Native constructor parameters exist only for the JS call (build.sbt silences the unused warning here).
 object Three:
 
   @js.native @JSGlobal("THREE.Vector3")
