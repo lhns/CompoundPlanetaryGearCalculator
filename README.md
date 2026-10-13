@@ -7,8 +7,19 @@ ranks them against user-supplied targets, and exports CSV / JSON / OpenSCAD.
 Three faces, one shared algorithm:
 
 - `cli` — command-line search with a pretty table.
-- `web` — Scala.js browser UI with a live SVG schematic.
+- `web` — Scala.js browser UI with an animated schematic and a 3D view.
 - `core` — library; cross-built for JVM and JS.
+
+![Sun-driven compound: animated schematic and search form](docs/images/overview-standard-2d.png)
+
+| | |
+|---|---|
+| ![Ring-to-sun cascade schematic](docs/images/ring-to-sun-2d.png) | ![Sun-less CDCP in 3D](docs/images/sunless-cdcp-3d.png) |
+| Ring-to-sun cascade: couplings drawn between the stages | Sun-less CDCP in 3D: stacked planets, shared carrier |
+| ![Simpson compound, light theme](docs/images/simpson-light.png) | ![Phone layout](docs/images/phone.png) |
+| Simpson compound, light theme | Phone layout |
+
+![Ravigneaux in 3D](docs/images/ravigneaux-3d.png)
 
 ## Layout
 

@@ -56,6 +56,12 @@ object ThreeView:
       val (tx, ty, tz) = orbit.target
       camera.position.set(x, y, z)
       camera.lookAt(tx, ty, tz)
+      layout.foreach { l =>
+        val zc         = (l.zMin + l.zMax) / 2.0
+        val (near, far) = Scene3D.clipPlanes(math.sqrt(x * x + y * y + (z - zc) * (z - zc)), Scene3D.boundingRadius(l))
+        camera.near = near; camera.far = far
+        camera.updateProjectionMatrix()
+      }
       renderer.render(scene, camera)
 
     def resize(w: Double, h: Double): Unit =

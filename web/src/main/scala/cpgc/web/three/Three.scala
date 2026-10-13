@@ -41,6 +41,8 @@ object Three:
   @js.native @JSGlobal("THREE.PerspectiveCamera")
   class PerspectiveCamera(fov0: Double, aspect0: Double, near0: Double, far0: Double) extends Object3D:
     var aspect: Double = js.native
+    var near: Double   = js.native
+    var far: Double    = js.native
     def updateProjectionMatrix(): Unit = js.native
 
   @js.native @JSGlobal("THREE.BufferGeometry")

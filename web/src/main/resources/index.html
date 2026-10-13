@@ -75,12 +75,14 @@
     img, svg, canvas, video { max-width: 100%; }
     /* Grid and flex items default to min-width:auto and would grow to their content; let them shrink. */
     .app > *, .top-grid > *, .panel > *, .panel-header > *, .controls > *, .show-more-row > * { min-width: 0; }
-    html, body { margin: 0; padding: 0; height: 100%; }
+    /* A solid page background: the body's gradient would otherwise repeat below a short page. No forced
+       heights: on mobile 100vh is the toolbar-hidden height, so it added scrollable empty space. */
+    html { background: var(--bg); }
+    html, body { margin: 0; padding: 0; }
     body {
       font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
       background: linear-gradient(180deg, var(--bg-top), var(--bg) 320px);
       color: var(--text);
-      min-height: 100vh;
     }
     header {
       padding: 0.75rem 1.25rem;
@@ -295,6 +297,7 @@
     }
     .rows-label { font-size: 0.78rem; color: var(--muted); margin: 0; }
     .rows-select {
+      flex: none; min-width: max-content; /* never shrink below "All" plus the arrow */
       height: 28px; padding: 0 1.7rem 0 0.6rem;
       background-color: var(--panel-2); color: var(--text);
       border: 1px solid var(--border); border-radius: 5px;

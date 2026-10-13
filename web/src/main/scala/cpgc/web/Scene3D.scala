@@ -83,6 +83,12 @@ object Scene3D:
   /** Space left around the model at the initial framing. */
   val FitMargin = 1.15
 
+  /** Near and far clip planes for a camera `dist` from the centre of a sphere of `radius`: tight around the
+    * model so the depth buffer resolves the sub-millimetre plate gaps; far/near never exceeds 1000. */
+  def clipPlanes(dist: Double, radius: Double): (Double, Double) =
+    val far = dist + 1.5 * radius
+    (math.max(dist - 1.5 * radius, far / 1000.0), far)
+
   def build(scene: Scene): Layout =
     val t        = scene.design.topology
     val twoStage = scene.stages.size == 2
@@ -127,11 +133,12 @@ object Scene3D:
           val (p0, p1) = plateZ(i)
           val arms     = c.arms.map(toWorld)
           val armW     = 3.0 * pinR(i)
-          // a stacked planet's pin runs the full height, so stage 2's carrier only adds its plate
+          // a stacked planet's pin runs the full height, so stage 2's carrier only adds its plate. Pins stick
+          // out past the planet's far face: a cap flush with it would z-fight.
           val pinSpan =
             if stacked then (if i == 1 then Some((p0, plateZ(2)._2)) else None)
-            else if i == 1 then Some((p0, z1 + w))
-            else Some((z2, p1))
+            else if i == 1 then Some((p0, z1 + w + clr))
+            else Some((z2 - clr, p1))
           Vector(Cyl(0, 0, 0.8 * armW, 0.8 * armW, p0, p1, false, c.tone)) ++
             arms.map((x, y) => Bar(0, 0, x, y, armW, p0, p1, c.tone)) ++
             pinSpan.toVector.flatMap((a, e) => arms.map((x, y) => Cyl(x, y, pinR(i), pinR(i), a, e, false, c.tone)))

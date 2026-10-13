@@ -211,6 +211,20 @@ class Scene3DSpec extends FunSuite:
       val half = math.asin(r / d)
       assert(half < fov / 2.0 && math.tan(half) < aspect * math.tan(fov / 2.0), s"aspect $aspect")
 
+  test("off-axis pins and posts never end flush with a planet face (z-fighting)"):
+    for (name, d) <- (new GearboxSceneSpec).presets do
+      val l     = lay(d)
+      val faces = l.clusters.flatMap(_.planets).flatMap(_.prims).collect { case e: Extruded => Seq(e.z0, e.z1) }.flatten
+      val pins  = allPrims(l).collect { case c: Cyl if c.x != 0.0 || c.y != 0.0 => c }
+      for c <- pins; z <- Seq(c.z0, c.z1); f <- faces do
+        assert(math.abs(z - f) > 1e-3 * l.faceWidth, s"$name: cylinder end at z=$z on a planet face")
+
+  test("clip planes enclose the bounding sphere and keep far/near at most 1000"):
+    for (dist, r) <- Seq((500.0, 100.0), (150.0, 100.0), (20.0, 100.0)) do
+      val (near, far) = clipPlanes(dist, r)
+      assert(far >= dist + r && far / near <= 1000.0 + 1e-9, s"dist $dist")
+      if dist > 1.5 * r then assert(near <= dist - r, s"dist $dist")
+
   test("refit snaps to the new home but keeps the orbit angles; rehome keeps the zoom ratio"):
     val o = new OrbitState(OrbitState.Home((0, 0, 0), 100.0))
     o.orbit(30, 10); o.zoomBy(0.5)
