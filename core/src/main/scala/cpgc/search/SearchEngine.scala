@@ -4,7 +4,6 @@ import cpgc.constraints.SearchConfig
 import cpgc.domain.{CompoundDesign, GearSet, Ratio}
 import cpgc.search.Scorer.{Scored, SortBy}
 
-import scala.collection.mutable
 
 /** Open-addressing set of longs with deletion (backward shift); no boxing. */
 private final class LongSet:
@@ -64,10 +63,13 @@ private final class LongSet:
   * already held is ignored. Keys are primitive longs; entries are meant to be
   * lightweight candidates, materialised by the reader. */
 final class TopK[A <: AnyRef](k: Int):
-  private final class Entry(val score: Double, val seq: Long, val key: Long, val value: A)
+  private final class Entry(val score: Double, val score2: Double, val seq: Long, val key: Long, val value: A)
   private def worse(a: Entry, b: Entry): Boolean =
     val c = java.lang.Double.compare(a.score, b.score)
-    if c != 0 then c > 0 else a.seq > b.seq
+    if c != 0 then c > 0
+    else
+      val c2 = java.lang.Double.compare(a.score2, b.score2)
+      if c2 != 0 then c2 > 0 else a.seq > b.seq
   // Binary max-heap: heap(0) is the worst kept entry.
   private var heap = new Array[Entry](math.max(1, math.min(k, 64)))
   private var n = 0
@@ -77,13 +79,17 @@ final class TopK[A <: AnyRef](k: Int):
   def size: Int = n
 
   /** Would an offer with this score be kept (key aside)? Cheap pre-check. */
-  def accepts(score: Double): Boolean =
-    k > 0 && !score.isNaN && (n < k || score < heap(0).score)
+  def accepts(score: Double, score2: Double = 0.0): Boolean =
+    k > 0 && !score.isNaN && (n < k || score < heap(0).score ||
+      (score == heap(0).score && score2 < heap(0).score2))
 
-  def offer(score: Double, key: Long, value: A): Unit =
-    if accepts(score) && !keys.contains(key) then
+  def offer(score: Double, key: Long, value: A): Unit = offer(score, 0.0, key, value)
+
+  /** `score2` breaks ties in `score`; remaining ties keep the earlier offer. */
+  def offer(score: Double, score2: Double, key: Long, value: A): Unit =
+    if accepts(score, score2) && !keys.contains(key) then
       arrivals += 1
-      val e = new Entry(score, arrivals, key, value)
+      val e = new Entry(score, score2, arrivals, key, value)
       if n >= k then
         keys.remove(heap(0).key)
         heap(0) = e
@@ -146,7 +152,6 @@ final class SearchEngine(val cfg: SearchConfig, val sortBy: SortBy = SortBy.Best
   private val targets = cfg.targets.distinct.toVector
   private val tops    = targets.map(t => t -> new TopK[SearchEngine.Cand](k))
   private val overall = new TopK[SearchEngine.Cand](k)
-  private val spill   = mutable.HashMap.empty[(Int, Int, Int, Int, Int, Int), Long]
   private var topCache: Vector[CompoundDesign] = null
   private var perTargetCache: Map[Ratio, Vector[Scored]] = null
   private var foundCount = 0L
@@ -213,33 +218,23 @@ final class SearchEngine(val cfg: SearchConfig, val sortBy: SortBy = SortBy.Best
         (s1.sun.toInt + s1.planet.toInt + s1.ring.toInt +
           (if s2 == null then 0 else s2.sun.toInt + s2.planet.toInt + s2.ring.toInt)).toDouble
 
-    var want = overall.accepts(score)
+    // Secondary key (same as `Scorer.tieBreak`): best-fit error when targets exist and the mode is
+    // not BestFit, else |ratio|. Per-target accumulators break ties by |ratio|.
+    val score2 = if targets.nonEmpty && sortBy != SortBy.BestFit then minErr else a
+    var want = overall.accepts(score, score2)
     ti = 0
     while !want && ti < tops.length do
-      want = tops(ti)._2.accepts(math.abs(math.abs(tops(ti)._1.value) - a))
+      want = tops(ti)._2.accepts(math.abs(math.abs(tops(ti)._1.value) - a), a)
       ti += 1
     if want then
       val c   = new SearchEngine.Cand(cfg, s1, s2, r, ev.wellConditioned, ev.module1, ev.module2)
-      val key = dedupKey(s1, s2)
-      overall.offer(score, key, c)
+      val key = Scorer.dedupKey(s1, s2) // the topology is fixed for the engine
+      overall.offer(score, score2, key, c)
       ti = 0
       while ti < tops.length do
         val (t, acc) = tops(ti)
-        acc.offer(math.abs(math.abs(t.value) - a), key, c)
+        acc.offer(math.abs(math.abs(t.value) - a), a, key, c)
         ti += 1
-
-  /** Dedup key: both stages' sun/planet teeth (ring follows) and N1, N2. The
-    * topology is fixed for the engine. Packed into 60 bits (bit 63 clear);
-    * out-of-range values get a sequential id with bit 63 set. */
-  private def dedupKey(s1: GearSet, s2: GearSet): Long =
-    val su1 = s1.sun.toInt; val p1 = s1.planet.toInt; val n1 = s1.numPlanets
-    val su2 = if s2 == null then 0 else s2.sun.toInt
-    val p2  = if s2 == null then 0 else s2.planet.toInt
-    val n2  = if s2 == null then 0 else s2.numPlanets
-    if ((su1 | p1 | su2 | p2) >>> 11) == 0 && ((n1 | n2) >>> 8) == 0 then
-      (((((su1.toLong << 11 | p1) << 11 | su2) << 11 | p2) << 8 | n1) << 8) | n2
-    else
-      spill.getOrElseUpdate((su1, p1, su2, p2, n1, n2), Long.MinValue | spill.size.toLong)
 
 object SearchEngine:
   /** A found design, kept light until a reader needs the full `CompoundDesign`. */

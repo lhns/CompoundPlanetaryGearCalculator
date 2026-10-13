@@ -11,11 +11,14 @@ class GeometrySpec extends FunSuite:
 
   private val s1 = GearSet(Teeth(24), Teeth(12), 3) // ring 48
 
+  private def firstModule(c: SearchConfig, g: GearSet): Option[Module] =
+    Some(Compounder.firstModuleValue(c, g)).filterNot(_.isNaN).map(Module.unsafe)
+
   test("golden: m1 = (OD − 2·ringWall) / (Tr1 + 2.5)") {
     val cfg = SearchConfig(firstStageOD = 150.0, ringWall = 2.0)
-    assertEqualsDouble(Compounder.firstModule(cfg, s1).get.value, 146.0 / 50.5, 1e-12)
-    assertEqualsDouble(Compounder.firstModule(cfg.copy(ringWall = 0.0), s1).get.value, 150.0 / 50.5, 1e-12)
-    assertEqualsDouble(Compounder.firstModule(cfg.copy(ringWall = 5.0, firstStageOD = 100.0), s1).get.value, 90.0 / 50.5, 1e-12)
+    assertEqualsDouble(firstModule(cfg, s1).get.value, 146.0 / 50.5, 1e-12)
+    assertEqualsDouble(firstModule(cfg.copy(ringWall = 0.0), s1).get.value, 150.0 / 50.5, 1e-12)
+    assertEqualsDouble(firstModule(cfg.copy(ringWall = 5.0, firstStageOD = 100.0), s1).get.value, 90.0 / 50.5, 1e-12)
   }
 
   test("defaults: ringWall 2 mm, planetClearance 0.5 modules") {
