@@ -77,8 +77,8 @@ publish (the optimized build is noticeably faster).
 
 The page is fully static. The `Dockerfile` builds it with sbt and serves it with Apache httpd on
 port 80. CI (`.github/workflows/ci.yml`) runs the tests on every push and pull request. It publishes
-the image to `ghcr.io/lhns/compoundplanetarygearcalculator` on pushes to `master` (`latest`, `sha-…`)
-and on `v*` tags (the version).
+the image to `ghcr.io/lhns/compoundplanetarygearcalculator` on pushes to `master` (`sha-<short sha>`)
+and on `v*` release tags (the version and `latest`).
 
 ```
 docker run -d --name cpgc -p 8080:80 ghcr.io/lhns/compoundplanetarygearcalculator:latest
