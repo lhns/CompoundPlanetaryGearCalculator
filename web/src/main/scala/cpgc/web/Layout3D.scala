@@ -38,7 +38,8 @@ object Layout3D:
   /** Gear body: `outline` extruded over z0..z1. With `outerRadius`, a disc of that radius with
     * `outline` as a hole (ring gear); without, a solid (sun, planet). */
   final case class Extruded(
-      outline: Vector[(Double, Double)], outerRadius: Option[Double], z0: Double, z1: Double, tone: Tone
+      outline: Vector[(Double, Double)], outerRadius: Option[Double], z0: Double, z1: Double, tone: Tone,
+      teeth: Int, body: Option[Body] // body is None for planets
   ) extends Prim
 
   /** Cylinder about the axis through (x, y); with different radii a cone, e.g. a ring-to-ring sleeve. */
@@ -136,7 +137,8 @@ object Layout3D:
       case Body.C1           => (plateZ(1)._1 + plateZ(1)._2) / 2.0
       case Body.C2           => (plateZ(2)._1 + plateZ(2)._2) / 2.0
 
-    def bodyPrims(b: Body, role: Option[BodyRole]): Vector[Prim] =
+    def bodyPrims(b: Body): Vector[Prim] =
+      val role = t.roles.get(b) // per body, as in the schematic: a free body keeps its coupling colour
       val i  = stageOf(b)
       val st = stageFor(i)
       val ph = phases(i - 1)
@@ -145,11 +147,13 @@ object Layout3D:
       b match
         case Body.S1 | Body.S2 =>
           val outline = flip(externalGearPoints(st.set.sun.toInt, m, ph.sun.fold(0.0)(toRad)))
-          Vector(Extruded(outline, None, z, z + w, roleTone(role, freeTone(b, if i == 1 then Tone.Sun1 else Tone.Sun2))))
+          Vector(Extruded(outline, None, z, z + w, roleTone(role, freeTone(b, if i == 1 then Tone.Sun1 else Tone.Sun2)),
+            st.set.sun.toInt, Some(b)))
         case Body.R1 | Body.R2 =>
           val outline = flip(internalGearPoints(st.set.ring.toInt, m, toRad(ph.ring)))
           Vector(Extruded(outline, Some(st.ringOuterDiameter / 2.0), z, z + w,
-            roleTone(role, freeTone(b, if i == 1 then Tone.Ring1 else Tone.Ring2))))
+            roleTone(role, freeTone(b, if i == 1 then Tone.Ring1 else Tone.Ring2)),
+            st.set.ring.toInt, Some(b)))
         case Body.C1 | Body.C2 =>
           val tone     = roleTone(role, freeTone(b, Tone.Carrier))
           val (p0, p1) = plateZ(i)
@@ -169,7 +173,8 @@ object Layout3D:
       planetPos(st).zipWithIndex.map { case ((x, y), k) =>
         val outline = flip(externalGearPoints(st.set.planet.toInt, st.module.value, toRad(phases(i - 1).planets(k))))
         PlanetPart(k, x, y, i, carrier, stacked = false,
-          Vector(Extruded(outline, None, zOf(i - 1), zOf(i - 1) + w, if i == 1 then Tone.Planet1 else Tone.Planet2)))
+          Vector(Extruded(outline, None, zOf(i - 1), zOf(i - 1) + w, if i == 1 then Tone.Planet1 else Tone.Planet2,
+          st.set.planet.toInt, None)))
       }
 
     def stackedParts(carrier: Body): Vector[PlanetPart] =
@@ -179,7 +184,7 @@ object Layout3D:
         def half(i: Int) =
           val st = stageFor(i)
           Extruded(flip(externalGearPoints(st.set.planet.toInt, st.module.value, toRad(phases(i - 1).planets(k)))),
-            None, zOf(i - 1), zOf(i - 1) + w, stackTone)
+            None, zOf(i - 1), zOf(i - 1) + w, stackTone, st.set.planet.toInt, None)
         PlanetPart(k, x, y, 1, carrier, stacked = true,
           Vector(half(1), Cyl(0, 0, hubR, hubR, z1 + w, z2, false, stackTone), half(2)))
       }
@@ -225,7 +230,7 @@ object Layout3D:
         case b @ Body.C2 if !stacked     => planetParts(b, 2)
         case _                           => Vector.empty
       }
-      Cluster(group, group.head, role, group.flatMap(bodyPrims(_, role)),
+      Cluster(group, group.head, role, group.flatMap(bodyPrims),
         connectors.collect { case (a, ps) if group.contains(a) => ps }.flatten, planets)
     }
 

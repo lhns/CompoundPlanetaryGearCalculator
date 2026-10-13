@@ -27,7 +27,7 @@ final class ThreeScene(layout: Layout3D.Layout, color: Tone => Int):
     new Mesh(g, material(tone))
 
   private def toMesh(p: Prim): Mesh = p match
-    case Extruded(outline, outerRadius, z0, z1, tone) =>
+    case Extruded(outline, outerRadius, z0, z1, tone, _, _) =>
       val shape = new Shape()
       def trace(path: Path): Unit =
         path.moveTo(outline.head._1, outline.head._2)
