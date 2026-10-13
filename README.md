@@ -55,7 +55,7 @@ directory or copy `main.js` next to `index.html` and open it in a browser.
   run finished untruncated and kept every design; otherwise it searches again. Without a target the
   default sort is the lowest ratio, and the pill says so.
 - **Topology**: pick a preset (including "CDCP (sun-less)"), or open "Advanced topology" for per-stage
-  sun toggles (a sun that is pinned or welded cannot be removed; the toggle says why), couplings,
+  sun toggles (a pinned sun hands its pin to a free body first; a welded sun, or one with no free body to take over, is locked and the toggle says why), couplings,
   Input/Output/Fixed bodies and "Individually phased pinions" (stacked layouts only: each planet gets
   its own twist, so more designs assemble but the planets are different parts). "Advanced gear
   constraints" has min module, max planet/sun ratio, ring wall (mm) and planet clearance (modules).
