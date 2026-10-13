@@ -2,21 +2,19 @@ package cpgc
 
 import cpgc.constraints.SearchConfig
 import cpgc.domain.{CompoundDesign, Ratio}
-import cpgc.search.{Scorer, SearchEngine, SearchSteps}
+import cpgc.search.{Compounder, PairSearch, Scorer, SearchEngine}
 import cpgc.search.Scorer.SortBy
 
 /** Thin wrappers over the one search engine (ADR 0017). */
 object Calculator:
 
-  /** Step-grained iterator over every valid design. Each `next()` does one unit
-    * of work, returning `Some(design)` when it accepted a candidate or `None`
-    * when it only advanced state. See `cpgc.search.SearchSteps`. */
-  def searchSteps(cfg: SearchConfig): Iterator[Option[CompoundDesign]] =
-    SearchSteps.forConfig(cfg)
-
   /** Lazy stream of every valid design implied by `cfg` (enumeration order). */
   def search(cfg: SearchConfig): LazyList[CompoundDesign] =
-    LazyList.from(SearchSteps.forConfig(cfg)).flatten
+    val ps = new PairSearch(cfg)
+    LazyList.from(
+      Iterator.continually(ps).takeWhile(!_.done).filter(_.advance())
+        .map(p => Compounder.design(cfg, p.s1, Option(p.s2), p.evaluator))
+    )
 
   /** The engine for `cfg`, to be driven in chunks (`step`) or run to completion. */
   def engine(cfg: SearchConfig, sortBy: SortBy = SortBy.BestFit, k: Int = 10): SearchEngine =

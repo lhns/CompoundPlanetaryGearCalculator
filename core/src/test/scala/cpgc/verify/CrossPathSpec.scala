@@ -11,8 +11,7 @@ import scala.util.Random
 
 /** The entry points are views of one engine (ADR 0017) and must agree on what a
   * valid design is:
-  *   - `search` and `searchSteps` emit identical design sets, with or without targets;
-  *   - everything `Calculator.best` / the engine reports is a design `search` emits;
+  *   - everything `Calculator.best` / the engine reports (with targets) is a design `search` emits;
   *   - identical-stage pairs `(a, a)` are searched;
   *   - negative-ratio designs are found when targeting their magnitude;
   *   - non-stacked topologies pair `N1 != N2`, stacked ones only equal N.
@@ -25,25 +24,6 @@ class CrossPathSpec extends FunSuite:
   private def keys(ds: Iterable[cpgc.domain.CompoundDesign]): Set[Key] = ds.map(key).toSet
 
   for c <- cases do
-    test(s"crosspath[${c.name}/no targets: search == searchSteps]") {
-      val rng = new Random(777L)
-      for _ <- 0 until NConfigs do
-        val cfg = c.config(randomConfig(rng, withTargets = false))
-        val a   = keys(Calculator.search(cfg))
-        val b   = keys(Calculator.searchSteps(cfg).flatten.toVector)
-        assertEquals(b -- a, Set.empty[Key], s"steps-only designs ${cfgSummary(cfg)}")
-        assertEquals(a -- b, Set.empty[Key], s"search-only designs ${cfgSummary(cfg)}")
-    }
-
-    test(s"crosspath[${c.name}/targets do not prune: searchSteps == search]") {
-      val rng = new Random(889L)
-      for _ <- 0 until NConfigs do
-        val cfg = c.config(randomConfig(rng, withTargets = true))
-        val all = keys(Calculator.search(cfg))
-        val st  = keys(Calculator.searchSteps(cfg).flatten.toVector)
-        assertEquals(st, all, s"${cfgSummary(cfg)}")
-    }
-
     test(s"crosspath[${c.name}/best() and engine results are designs of search]") {
       val rng = new Random(888L)
       for _ <- 0 until NConfigs do

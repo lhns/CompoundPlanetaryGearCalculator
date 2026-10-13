@@ -1,7 +1,7 @@
 package cpgc.search
 
 import cpgc.constraints.SearchConfig
-import cpgc.domain.{CompoundDesign, GearSet}
+import cpgc.domain.GearSet
 
 import scala.collection.mutable
 
@@ -97,18 +97,3 @@ final class PairSearch(cfg: SearchConfig):
 
   private def setCands(): Unit =
     cands = if topology.stacked then byN.getOrElse(buf1(iIdx).numPlanets, noGears) else buf2
-
-object SearchSteps:
-
-  /** Step-grained enumeration of all valid designs for `cfg`. Each `next()` does
-    * one unit of work: `Some(design)` when it accepted a candidate, `None` when
-    * it only advanced state. Use it when bounded latency per step matters (a
-    * browser chunk loop). `hasNext == false` once the space is consumed. */
-  def forConfig(cfg: SearchConfig): Iterator[Option[CompoundDesign]] =
-    new Iterator[Option[CompoundDesign]]:
-      private val ps = new PairSearch(cfg)
-      override def hasNext: Boolean = !ps.done
-      override def next(): Option[CompoundDesign] =
-        if ps.done then Iterator.empty.next()
-        else if ps.advance() then Some(Compounder.design(cfg, ps.s1, Option(ps.s2), ps.evaluator))
-        else None

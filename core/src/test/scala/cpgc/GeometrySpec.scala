@@ -67,6 +67,5 @@ class GeometrySpec extends FunSuite:
         planets = TeethBounds(3, 3), targets = Seq(cpgc.domain.Ratio(10.0)))
       assertEquals(Calculator.search(cfg).size, 0, s"OD=$od")
       assertEquals(Calculator.top(cfg).size, 0, s"OD=$od")
-      assertEquals(Calculator.searchSteps(cfg).flatten.size, 0, s"OD=$od")
       assertEquals(Calculator.best(cfg).values.map(_.size).sum, 0, s"OD=$od")
   }
