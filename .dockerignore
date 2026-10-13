@@ -1,0 +1,13 @@
+**/target
+.git
+.github
+.bsp
+.bloop
+.metals
+.idea
+.vscode
+.claude
+docs
+notes
+tools
+cli
