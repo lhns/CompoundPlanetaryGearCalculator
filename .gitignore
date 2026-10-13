@@ -10,3 +10,4 @@ project/project/
 *.iml
 *.class
 *.log
+.claude/
