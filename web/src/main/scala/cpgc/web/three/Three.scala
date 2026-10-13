@@ -5,20 +5,16 @@ import scala.scalajs.js
 import scala.scalajs.js.annotation.JSGlobal
 
 /** Minimal facades for the part of three.js r158 (global build, `window.THREE`) the 3D view uses. */
-// Native constructor parameters exist only for the JS call (build.sbt silences the unused warning here).
+// Native constructor parameters exist only for the JS call (build.sbt silences the unused-parameter warning here).
 object Three:
 
   @js.native @JSGlobal("THREE.Vector3")
   class Vector3() extends js.Object:
-    var x: Double = js.native
-    var y: Double = js.native
     var z: Double = js.native
     def set(x: Double, y: Double, z: Double): Vector3 = js.native
 
   @js.native @JSGlobal("THREE.Euler")
   class Euler() extends js.Object:
-    var x: Double = js.native
-    var y: Double = js.native
     var z: Double = js.native
 
   @js.native @JSGlobal("THREE.Object3D")

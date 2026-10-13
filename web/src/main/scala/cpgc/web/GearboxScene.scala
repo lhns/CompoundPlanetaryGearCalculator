@@ -5,30 +5,30 @@ import cpgc.domain.{CompoundDesign, Stage}
 import cpgc.kinematics.BodyAngles
 import cpgc.render.Phasing
 import cpgc.web.Palette.Tone
-import cpgc.web.SchematicLayout.{externalGearPoints, internalGearPoints, planetPosition, toRad}
+import cpgc.web.SchematicLayout.{externalGearPoints, internalGearPoints}
 
 /** The one pure scene model of a design, consumed by both renderers (SVG schematic and 3D view).
   * It owns everything that is not drawing style: which gears exist, how many, where, their size and
   * tooth outline (with the tooth phase baked in), colour tone and role. Absent suns are not in it.
   *
-  * Millimetres, schematic convention (x right, y down), each stage about its own axis; planet
-  * centres are given at rest, in the carrier's frame. Renderers add only their own presentation
-  * (the schematic scales and spaces the stages, the 3D view adds depth and weld solids). Angles
-  * per phase come from `Kinematics` via `angle` / `carrierAngle`. */
+  * Units and axes: lengths in millimetres, x right, y down (screen convention), each stage about its
+  * own axis; angles in radians, clockwise-positive on screen. Planet centres are given at rest, in
+  * the carrier's frame. Renderers convert at one point each: the schematic scales mm to drawing units
+  * (`StageLayout.scale`), the 3D view flips y and negates angles (`Scene3D`, `ThreeScene`). Angles per
+  * phase come from `Kinematics` via `angle` / `carrierAngle` / `clusterAngle`. */
 object GearboxScene:
 
   enum Kind:
     case Sun, Planet, Ring, Carrier
 
   /** One gear. `outline` is about the gear's own centre; for a ring it is the tooth side (a hole in a
-    * disc of radius `outerRadius`). A planet of a stacked design has `stackIndex` = planet number, shared
-    * by its stage-1 and stage-2 gears (one physical part). */
+    * disc of radius `outerRadius`). Planet k of stage 1 and of stage 2 are one physical part when the
+    * scene is `stacked`. */
   final case class Gear(
       id: String,
       stage: Int,
       kind: Kind,
       body: Option[Body], // None for planets
-      index: Int,         // planet number, 0 otherwise
       centre: (Double, Double),
       teeth: Int,
       module: Double,
@@ -37,18 +37,17 @@ object GearboxScene:
       outerRadius: Option[Double],
       tone: Tone,
       role: Option[BodyRole],
-      coupling: Option[Int],
-      stackIndex: Option[Int]
+      coupling: Option[Int]
   )
 
   /** A carrier: one arm per planet, from the axis to the planet centre, at radius `radius`. */
   final case class Carrier(
-      stage: Int, body: Body, radius: Double, arms: Vector[(Double, Double)],
+      body: Body, radius: Double, arms: Vector[(Double, Double)],
       tone: Tone, role: Option[BodyRole], coupling: Option[Int]
   )
 
   final case class StageScene(
-      index: Int, stage: Stage, sun: Option[Gear], ring: Gear, planets: Vector[Gear], carrier: Carrier
+      stage: Stage, sun: Option[Gear], ring: Gear, planets: Vector[Gear], carrier: Carrier
   ):
     def gears: Vector[Gear] = sun.toVector ++ Vector(ring) ++ planets
 
@@ -57,7 +56,6 @@ object GearboxScene:
       stages: Vector[StageScene],
       clusters: Vector[Vector[Body]],        // bodies welded into one rigid piece
       couplings: Vector[(Int, Coupling)],    // (slot, coupling) of a compound
-      marks: SchematicLayout.CouplingMarks,
       stacked: Boolean
   ):
     def gears: Vector[Gear] = stages.flatMap(_.gears)
@@ -81,13 +79,12 @@ object GearboxScene:
     val phasing = Phasing.solve(d)
     val stacked = t.stacked && d.stage2.isDefined
 
-    def slotTone(slot: Int): Tone = if slot == 1 then Tone.Cpl1 else Tone.Cpl2
     // pinned role first, then the coupling, then the stage tint (the schematic's rule, per body)
     def toneOf(role: Option[BodyRole], slot: Option[Int], tint: Tone): Tone = role match
       case Some(BodyRole.Input)  => Tone.Input
       case Some(BodyRole.Output) => Tone.Output
       case Some(BodyRole.Fixed)  => Tone.Fixed
-      case _                     => slot.fold(tint)(slotTone)
+      case _                     => slot.fold(tint)(Palette.slotTone)
 
     val stageList = Vector((d.stage1, phasing.stage1)) ++ d.stage2.zip(phasing.stage2)
     val stages = stageList.zipWithIndex.map { case ((st, ph), idx) =>
@@ -105,33 +102,46 @@ object GearboxScene:
 
       val sun = Option.when(t.sunPresent(i)) {
         val teeth = st.set.sun.toInt
-        Gear(s"S$i", i, Kind.Sun, Some(sunB), 0, (0.0, 0.0), teeth, m, m * teeth / 2.0,
+        Gear(s"S$i", i, Kind.Sun, Some(sunB), (0.0, 0.0), teeth, m, m * teeth / 2.0,
           externalGearPoints(teeth, m, ph.sun.fold(0.0)(toRad)), None,
-          toneOf(role(sunB), slot(sunB), sunTint), role(sunB), slot(sunB), None)
+          toneOf(role(sunB), slot(sunB), sunTint), role(sunB), slot(sunB))
       }
       val ring =
         val teeth = st.set.ring.toInt
-        Gear(s"R$i", i, Kind.Ring, Some(ringB), 0, (0.0, 0.0), teeth, m, m * teeth / 2.0,
+        Gear(s"R$i", i, Kind.Ring, Some(ringB), (0.0, 0.0), teeth, m, m * teeth / 2.0,
           internalGearPoints(teeth, m, toRad(ph.ring)), Some(st.ringOuterDiameter / 2.0),
-          toneOf(role(ringB), slot(ringB), ringTint), role(ringB), slot(ringB), None)
-      val centres = Vector.tabulate(n)(k => planetPosition(k, n, 0.0, st.centerToCenter))
+          toneOf(role(ringB), slot(ringB), ringTint), role(ringB), slot(ringB))
+      val centres = Vector.tabulate(n)(k => planetPosition(k, n, st.centerToCenter))
       val planets = centres.zipWithIndex.map { case (c, k) =>
         val teeth = st.set.planet.toInt
-        Gear(s"P$i.$k", i, Kind.Planet, None, k, c, teeth, m, m * teeth / 2.0,
+        Gear(s"P$i.$k", i, Kind.Planet, None, c, teeth, m, m * teeth / 2.0,
           externalGearPoints(teeth, m, toRad(ph.planets(k))), None,
-          toneOf(None, marks.planets, planetTint), None, marks.planets, Option.when(stacked)(k))
+          toneOf(None, marks.planets, planetTint), None, marks.planets)
       }
-      val carrier = Carrier(i, carB, st.centerToCenter, centres, toneOf(role(carB), slot(carB), Tone.Carrier), role(carB), slot(carB))
-      StageScene(i, st, sun, ring, planets, carrier)
+      val carrier = Carrier(carB, st.centerToCenter, centres, toneOf(role(carB), slot(carB), Tone.Carrier), role(carB), slot(carB))
+      StageScene(st, sun, ring, planets, carrier)
     }
 
     val slots = if d.stage2.isDefined then Vector(1 -> t.firstCoupling, 2 -> t.secondCoupling) else Vector.empty
-    Scene(d, stages, clusterBodies(d), slots, marks, stacked)
+    Scene(d, stages, clusterBodies(d), slots, stacked)
+
+  /** Position of planet `i` of `n` on a carrier of radius `carrierR` about the axis: planet 0 at the
+    * top, then i·360/N clockwise on screen. */
+  private def planetPosition(i: Int, n: Int, carrierR: Double): (Double, Double) =
+    val theta = 2.0 * math.Pi * i / n - math.Pi / 2.0
+    (carrierR * math.cos(theta), carrierR * math.sin(theta))
+
+  /** Phasing turns → drawn angle: planet i sits at 2πi/N − π/2, so the phasing frame
+    * (planet k at k/N turns) is rotated by a quarter turn; mesh conditions are invariant under that shift. */
+  private def toRad(turns: Double): Double = 2.0 * math.Pi * (turns - 0.25)
 
   // ── Poses (per frame; the scene itself is static) ──────────────────────────
 
   /** Carrier angle of a stage. */
   def carrierAngle(s: StageScene, a: BodyAngles): Double = a.of(s.carrier.body)
+
+  /** Angle of a weld cluster: that of its first body (all of them turn as one). */
+  def clusterAngle(bodies: Vector[Body], a: BodyAngles): Double = a.of(bodies.head)
 
   /** Rotation of a gear about its own centre, in the schematic's clockwise-positive convention:
     * sun / ring turn with their body, a planet relative to its carrier. */

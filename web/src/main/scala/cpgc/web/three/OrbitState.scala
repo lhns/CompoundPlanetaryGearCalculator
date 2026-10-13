@@ -31,8 +31,7 @@ final class OrbitState(private var home: OrbitState.Home):
     pitchV = clamp(pitchV + dy * RadiansPerPixel, MinPitch, MaxPitch)
 
   /** Wheel zoom; `deltaY > 0` moves away. */
-  def zoom(deltaY: Double): Unit =
-    distV = clamp(distV * math.exp(deltaY * 0.0015), home.distance * MinZoom, home.distance * MaxZoom)
+  def zoom(deltaY: Double): Unit = zoomBy(math.exp(deltaY * 0.0015))
 
   /** Multiplicative zoom (pinch), `factor < 1` moves closer. */
   def zoomBy(factor: Double): Unit =
@@ -50,9 +49,9 @@ final class OrbitState(private var home: OrbitState.Home):
   def position: (Double, Double, Double) =
     (tx + distV * math.cos(pitchV) * math.cos(yawV), ty + distV * math.cos(pitchV) * math.sin(yawV), tz + distV * math.sin(pitchV))
 
-  /** Camera right and up vectors in world space. */
-  def right: (Double, Double, Double) = (-math.sin(yawV), math.cos(yawV), 0.0)
-  def up: (Double, Double, Double) =
+  /** Camera right and up vectors in world space (for panning). */
+  private def right: (Double, Double, Double) = (-math.sin(yawV), math.cos(yawV), 0.0)
+  private def up: (Double, Double, Double) =
     (-math.sin(pitchV) * math.cos(yawV), -math.sin(pitchV) * math.sin(yawV), math.cos(pitchV))
 
 object OrbitState:

@@ -25,6 +25,12 @@ object Palette:
     Tone.Carrier -> 0x8b949e
   )
 
+  /** Colour key of coupling `slot` (1 or 2). */
+  def slotTone(slot: Int): Tone = if slot == 1 then Tone.Cpl1 else Tone.Cpl2
+
+  /** Role legend entries, in display order; both views list these before the couplings. */
+  val RoleLegend: Vector[(Tone, String)] = Vector(Tone.Input -> "input", Tone.Output -> "output", Tone.Fixed -> "fixed")
+
   def hex(t: Tone, light: Boolean): Int =
     Themed.get(t).fold(Tints(t))((d, l) => if light then l else d)
 

@@ -1,6 +1,7 @@
 package cpgc.web
 
 import com.raquo.laminar.api.L.*
+import cpgc.constraints.Coupling
 import cpgc.domain.CompoundDesign
 import cpgc.kinematics.Kinematics
 import cpgc.web.Palette.Tone
@@ -15,6 +16,10 @@ import scala.scalajs.js
 object ThreeView:
 
   private val FovDeg = 35.0
+
+  /** Home camera distance in outer radii; frames the gearbox at `FovDeg`. */
+  private val HomeDistanceFactor = 2.6
+  private def homeDistance(outerRadius: Double): Double = outerRadius * HomeDistanceFactor
 
   private def light: Boolean =
     try dom.window.matchMedia("(prefers-color-scheme: light)").matches catch case _: Throwable => false
@@ -65,27 +70,26 @@ object ThreeView:
       current = None
 
     /** Rebuild for a new design (or empty); returns its couplings for the legend. */
-    def show(d: Option[CompoundDesign]): Vector[(Int, cpgc.constraints.Coupling)] =
+    def show(d: Option[CompoundDesign]): Vector[(Int, Coupling)] =
       clear()
-      val cs = d.fold(Vector.empty[(Int, cpgc.constraints.Coupling)]) { design =>
+      val cs = d.fold(Vector.empty[(Int, Coupling)]) { design =>
         val model  = GearboxScene.of(design)
         val layout = Scene3D.build(model)
         val s      = new ThreeScene(layout, color)
         scene.add(s.root)
         current = Some((design, s))
-        val home = OrbitState.Home(
-          (0.0, 0.0, (layout.zMin + layout.zMax) / 2.0),
-          layout.outerRadius * 2.6 * 35.0 / FovDeg)
-        orbit.rehome(home)
-        pose(phase)
+        orbit.rehome(OrbitState.Home((0.0, 0.0, (layout.zMin + layout.zMax) / 2.0), homeDistance(layout.outerRadius)))
+        applyPhase()
         model.couplings
       }
       draw()
       cs
 
+    private def applyPhase(): Unit = current.foreach((d, s) => s.pose(Kinematics.at(d, phase)))
+
     def pose(p: Double): Unit =
       phase = p
-      current.foreach((d, s) => s.pose(Kinematics.at(d, p)))
+      applyPhase()
       draw()
 
     def dispose(): Unit =
@@ -102,7 +106,7 @@ object ThreeView:
       progress: Signal[Int]
   ): HtmlElement =
     val noWebgl  = Var(false)
-    val couplings = Var(Vector.empty[(Int, cpgc.constraints.Coupling)])
+    val couplings = Var(Vector.empty[(Int, Coupling)])
     val host     = div(cls := "three-host")
     val hostRef  = host.ref
 
@@ -116,9 +120,9 @@ object ThreeView:
           case (_, None, st, n)            => message(st, n)
         }),
       div(cls := "three-legend",
-        swatch(css(Tone.Input), "input"), swatch(css(Tone.Output), "output"), swatch(css(Tone.Fixed), "fixed"),
+        Palette.RoleLegend.map((tone, name) => swatch(css(tone), name)),
         children <-- couplings.signal.map { cs =>
-          cs.map((slot, c) => swatch(css(if slot == 1 then Tone.Cpl1 else Tone.Cpl2), SchematicLayout.couplingLegendLabel(c)))
+          cs.map((slot, c) => swatch(css(Palette.slotTone(slot)), SchematicLayout.couplingLegendLabel(c)))
         }),
       onMountUnmountCallbackWithState[HtmlElement, Option[Live]](
         mount = ctx =>
@@ -143,7 +147,7 @@ object ThreeView:
             val fill = new DirectionalLight(0xffffff, 0.7); fill.position.set(-200, 150, -100); scene.add(fill)
 
             val live     = new Live(renderer, scene, camera)
-            val controls = new OrbitControls(canvas, () => live.orbit, math.toRadians(FovDeg), () => live.draw())
+            val controls = new OrbitControls(canvas, live.orbit, math.toRadians(FovDeg), () => live.draw())
             val observer = new dom.ResizeObserver((_, _) => live.resize(hostRef.clientWidth.toDouble, hostRef.clientHeight.toDouble))
             live.cleanup = () => { observer.disconnect(); controls.detach() }
             observer.observe(hostRef)

@@ -6,7 +6,7 @@ import scala.scalajs.js
 /** Mouse / touch input for the 3D view: drag orbits, shift- or right-drag pans, wheel and pinch zoom,
   * double-click resets. Drives an `OrbitState`; `onChange` asks the view to redraw. */
 final class OrbitControls(
-    canvas: dom.HTMLCanvasElement, orbit: () => OrbitState, fovRad: Double, onChange: () => Unit
+    canvas: dom.HTMLCanvasElement, orbit: OrbitState, fovRad: Double, onChange: () => Unit
 ):
   private var pointers = Map.empty[Int, (Double, Double)]
   private var panning  = false
@@ -24,10 +24,10 @@ final class OrbitControls(
         val before = spread()
         pointers = pointers.updated(id, (e.clientX, e.clientY))
         val after = spread()
-        if after > 1.0 && before > 1.0 then orbit().zoomBy(before / after)
+        if after > 1.0 && before > 1.0 then orbit.zoomBy(before / after)
       else
         pointers = pointers.updated(id, (e.clientX, e.clientY))
-        if panning then orbit().pan(dx, dy, canvas.clientHeight.toDouble, fovRad) else orbit().orbit(dx, dy)
+        if panning then orbit.pan(dx, dy, canvas.clientHeight.toDouble, fovRad) else orbit.orbit(dx, dy)
       onChange()
     }
 
@@ -36,11 +36,11 @@ final class OrbitControls(
 
   private val onWheel: js.Function1[dom.WheelEvent, Unit] = e =>
     e.preventDefault()
-    orbit().zoom(if e.deltaMode == 1 then e.deltaY * 16.0 else e.deltaY)
+    orbit.zoom(if e.deltaMode == 1 then e.deltaY * 16.0 else e.deltaY)
     onChange()
 
   private val onDouble: js.Function1[dom.MouseEvent, Unit] = _ =>
-    orbit().reset()
+    orbit.reset()
     onChange()
 
   private val onContext: js.Function1[dom.Event, Unit] = e => e.preventDefault()
