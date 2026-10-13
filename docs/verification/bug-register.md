@@ -29,6 +29,7 @@ no test yet) · **design** (needs a decision) · **limitation** (documented, not
 | B8 | CLI without a target prints the first N enumerated designs, unsorted | `--top` is not a top-K | **fixed** (was: confirmed-read) |
 | B9 | Web search keeps the first 10 000 designs in enumeration order (plus a 5 s time cap), then sorts | Best designs can fall outside the cap; truncated runs vary between runs | **fixed** (engine top-K; the web drives the same engine) |
 | B10 | `math.round(x).toInt` overflow and absolute singularity thresholds can leak near-infinite ratios | Rare garbage rows | open (low): closed-form overflow gone with the inverse solvers; absolute singularity threshold remains |
+| B12 | Assembly: spacing `(S+R) % N == 0` per stage (none for sun-less stages) misses the cross term for identical stepped planets, `((Tp1·Tr2 − Tp2·Tr1)/gcd(Tp1,Tp2)) % N == 0` | 43–69 % of accepted stacked designs could not be assembled | **fixed** per ADR 0018; verified by an exact tooth-phase oracle (`assembly-conditions.md`). `phasedPinions` opts out |
 
 ## Mode vs topology (core model)
 | ID | Bug | Effect | Status |

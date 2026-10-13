@@ -10,7 +10,7 @@ read `mode`. The web UI sets `mode = Standard` for every non-canonical layout, s
 rules (bug register B2, B3, B5, U6, P5).
 
 Separately, only stage 2's sun could be absent, and the solver handled that with one hard-coded NSS row that
-ignored the chosen couplings. A carrier-driven compound can also be built with *no* suns, while ours keeps
+ignored the chosen couplings. The carrier-driven compound is usually built with *no* suns, while ours keeps
 real suns. With real suns, `(S+R) % N == 0` is physically required, yet CDCP skipped it.
 
 ## Decision
