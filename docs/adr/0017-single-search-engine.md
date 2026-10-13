@@ -12,7 +12,7 @@ designs (bug register B4). `Scorer.topPerTarget` evicted the best candidate (B1)
 quadratics in `Tr2`, so no exact closed-form inverse exists for arbitrary couplings.
 
 ## Decision
-- One step iterator (the `SearchSteps` shape) enumerates **all** stage pairs from per-topology stage pools,
+- One step iterator (`PairSearch`) enumerates **all** stage pairs from per-topology stage pools,
   including identical pairs and, for non-stacked topologies, `N1 ≠ N2`. The CLI drains it, the web runs it in
   chunks, and `Calculator.search`/`best` are thin wrappers.
 - Results go into one bounded accumulator: top-K by the selected key (best-fit error per target, or ratio,
@@ -28,10 +28,10 @@ quadratics in `Tr2`, so no exact closed-form inverse exists for arbitrary coupli
 - Targeted and untargeted searches return the same designs; only ranking differs.
 - Wide ranges cost time, not correctness; the UI states when results are truncated.
 
-## Implementation (milestone B)
+## Implementation
 - `PairSearch` is the one enumeration: per-stage pools, stages failing their own sum rule dropped before
-  pairing, equal-N pairing for stacked topologies, identical pairs included. `SearchSteps.forConfig` and
-  `SearchEngine` are both views of it. `Compounder.Evaluator` does the cheap rejects (stacking, sum rule,
+  pairing, equal-N pairing for stacked topologies, identical pairs included. `Calculator.search` and
+  `SearchEngine` are both views of it (the separate `SearchSteps` wrapper was folded away). `Compounder.Evaluator` does the cheap rejects (stacking, sum rule,
   ADR 0018 cross term, modules) and then solves with a reusable `RoleSolver.Workspace`, so the hot path
   allocates nothing; a `CompoundDesign` is built only for candidates that enter a top-K.
 - `SearchEngine(cfg, sortBy, k)`: `step(units)` returns true when done, `top` / `perTarget` are snapshots,

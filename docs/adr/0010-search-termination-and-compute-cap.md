@@ -1,7 +1,7 @@
 # ADR 0010 — Search termination, inverse-solver, and the 10 000 compute cap
 
 ## Status
-Accepted.
+Accepted; the inverse solver and result handling are superseded by [ADR 0017](0017-single-search-engine.md).
 
 ## Context
 

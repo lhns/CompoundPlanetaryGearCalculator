@@ -18,6 +18,8 @@ core/   — pure algorithm, cross-built JVM+JS, zero deps
 cli/    — JVM CLI (decline)
 web/    — Scala.js + Laminar UI
 docs/adr/ — architecture decision records
+docs/verification/ — correctness strategy, bug register, assembly conditions
+tools/reference/ — generator for the reference-program fixtures
 ```
 
 ## Quickstart
@@ -37,18 +39,21 @@ Useful flags:
 - `--od <mm>`  first-stage ring outer diameter, `--ring-wall <mm>`, `--planet-clearance <modules>`
 - `--sort best|ratio|efficiency|simplicity` ranking (default: closest to the targets, or smallest ratio without targets)
 - `--phased-pinions`  stacked planets cut with a planet-specific twist (drops the identical-pinion assembly rule, ADR 0018)
-- `--min-module <mm/tooth>`
-- `--csv out.csv` / `--json out.json` / `--scad design.scad`
+- `--min-module <mm/tooth>`, `--sun-planet-factor <x>` (max planet/sun teeth ratio)
+- `--top <k>` results (per target when targets are given)
+- `--csv out.csv` / `--json out.json` / `--scad design.scad` (OpenSCAD for the top design), `--no-table`
 
 ### Web UI
 
 ```
-sbt web/fastLinkJS
-# then serve web/src/main/resources alongside web/target/scala-*/cpgc-web-fastopt/
+sbt web/webDist       # optimized build (fullLinkJS) -> web/target/dist/{index.html,main.js}
+sbt web/webDistDev    # same layout from the fast, unoptimized build (development)
+# then serve web/target/dist with any static file server, e.g.
+python -m http.server -d web/target/dist
 ```
 
-A minimal `index.html` is included; point a static file server at the `web` output
-directory or copy `main.js` next to `index.html` and open it in a browser.
+`index.html` loads `./main.js`, so the folder is self-contained; use `webDist` for anything you
+publish (the optimized build is noticeably faster).
 
 - **Search**: the page drives the same `SearchEngine` as the CLI in ~12 ms chunks, capped at 5 s
   (then "best so far, truncated, narrow your ranges"). Changing the sort re-ranks in place when the
@@ -72,24 +77,30 @@ directory or copy `main.js` next to `index.html` and open it in a browser.
 
 ```scala
 import cpgc.Calculator
-import cpgc.constraints.{SearchConfig, TeethBounds}
-import cpgc.domain.{Mode, Ratio}
+import cpgc.constraints.{SearchConfig, Topology}
+import cpgc.domain.Ratio
 
 val cfg = SearchConfig(
-  mode    = Mode.Standard,
-  targets = Seq(Ratio(53.12))
+  topology = Topology.standardCompound,   // or cdcpCompound, nssCompound, sunlessCdcpCompound, ...
+  targets  = Seq(Ratio(53.12))
 )
-val designs = Calculator.best(cfg)
+val best    = Calculator.best(cfg)                 // top designs per target
+val ranked  = Calculator.top(cfg)                  // overall top-K (Scorer.SortBy)
+val stream  = Calculator.search(cfg)               // every valid design, lazily
 ```
+
+`Calculator.engine(cfg)` returns the incremental engine the web UI drives in chunks.
 
 ## Testing
 
 ```
-sbt test
+sbt coreJVM/test coreJS/test web/test
 ```
 
-Property tests (`scalacheck`) cover the tooth invariants and spacing checks.
-Unit tests lock the compound-ratio math and CSV determinism.
+The harness (contract, completeness, cross-path, reference differential, assembly oracle,
+independent tabular solver) is described in `docs/verification/correctness-strategy.md`;
+known issues are in `docs/verification/bug-register.md`. Diagnostics are excluded by
+default (command in that document).
 
 ## Architecture
 
@@ -104,3 +115,12 @@ See `docs/adr/` for the design decisions:
 7. CAD export scope — OpenSCAD only.
 8. Web architecture — Laminar + SVG schematic.
 9. CLI parser — decline.
+10. Search termination and compute cap.
+11. Alignment and native-rows select.
+12. NSS as a design-space expansion.
+13. Generalised role assignment.
+14. Inverse-solver dispatch (superseded by 17).
+15. Topology is the single source of truth.
+16. Physical ring OD and planet clearance.
+17. One exhaustive search engine with a bounded top-K.
+18. Assembly condition for stacked planets.
