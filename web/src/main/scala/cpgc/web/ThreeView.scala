@@ -17,9 +17,7 @@ object ThreeView:
 
   private val FovDeg = 35.0
 
-  /** Home camera distance in outer radii; frames the gearbox at `FovDeg`. */
-  private val HomeDistanceFactor = 2.6
-  private def homeDistance(outerRadius: Double): Double = outerRadius * HomeDistanceFactor
+  private val FovRad = math.toRadians(FovDeg)
 
   private def light: Boolean =
     try dom.window.matchMedia("(prefers-color-scheme: light)").matches catch case _: Throwable => false
@@ -47,6 +45,8 @@ object ThreeView:
 
   private final class Live(renderer: WebGLRenderer, scene: Scene, camera: PerspectiveCamera):
     var current: Option[(CompoundDesign, ThreeScene)] = None
+    private var layout: Option[Scene3D.Layout] = None
+    private var aspect = 1.0
     val orbit = new OrbitState(OrbitState.Home((0.0, 0.0, 0.0), 300.0))
     var cleanup: () => Unit = () => ()
     var phase = 0.0
@@ -61,13 +61,20 @@ object ThreeView:
     def resize(w: Double, h: Double): Unit =
       if w > 0 && h > 0 then
         renderer.setSize(w, h, false)
-        camera.aspect = w / h
+        aspect = w / h
+        camera.aspect = aspect
         camera.updateProjectionMatrix()
+        layout.foreach(l => orbit.rehome(home(l))) // keeps the user's zoom; an untouched view stays fitted
         draw()
 
     def clear(): Unit =
       current.foreach { (_, s) => scene.remove(s.root); s.dispose() }
       current = None
+      layout = None
+
+    /** Orbit home that frames the whole model at the current canvas aspect. */
+    private def home(l: Scene3D.Layout): OrbitState.Home =
+      OrbitState.Home((0.0, 0.0, (l.zMin + l.zMax) / 2.0), Scene3D.fitDistance(Scene3D.boundingRadius(l), FovRad, aspect))
 
     /** Rebuild for a new design (or empty); returns its couplings for the legend. */
     def show(d: Option[CompoundDesign]): Vector[(Int, Coupling)] =
@@ -78,7 +85,8 @@ object ThreeView:
         val s      = new ThreeScene(layout, color)
         scene.add(s.root)
         current = Some((design, s))
-        orbit.rehome(OrbitState.Home((0.0, 0.0, (layout.zMin + layout.zMax) / 2.0), homeDistance(layout.outerRadius)))
+        this.layout = Some(layout)
+        orbit.refit(home(layout))
         applyPhase()
         model.couplings
       }
@@ -147,7 +155,7 @@ object ThreeView:
             val fill = new DirectionalLight(0xffffff, 0.7); fill.position.set(-200, 150, -100); scene.add(fill)
 
             val live     = new Live(renderer, scene, camera)
-            val controls = new OrbitControls(canvas, live.orbit, math.toRadians(FovDeg), () => live.draw())
+            val controls = new OrbitControls(canvas, live.orbit, FovRad, () => live.draw())
             val observer = new dom.ResizeObserver((_, _) => live.resize(hostRef.clientWidth.toDouble, hostRef.clientHeight.toDouble))
             live.cleanup = () => { observer.disconnect(); controls.detach() }
             observer.observe(hostRef)

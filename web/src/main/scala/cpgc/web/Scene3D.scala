@@ -66,6 +66,23 @@ object Scene3D:
       clusters: Vector[Cluster]
   )
 
+  /** Radius of the sphere around the model's axis midpoint that contains it: the outer ring cylinder
+    * (no part reaches further out) over the full axial span. Orientation-independent, so it holds
+    * for every orbit angle. */
+  def boundingRadius(l: Layout): Double =
+    math.hypot(l.outerRadius, (l.zMax - l.zMin) / 2.0)
+
+  /** Camera distance at which a sphere of `radius` fits the frustum with `margin` to spare, for a
+    * vertical field of view `fovRad` and a canvas of `aspect` = width / height. Uses the narrower of
+    * the vertical and horizontal fields, i.e. the larger distance. */
+  def fitDistance(radius: Double, fovRad: Double, aspect: Double, margin: Double = FitMargin): Double =
+    val vHalf = fovRad / 2.0
+    val hHalf = math.atan(math.max(aspect, 1e-6) * math.tan(vHalf))
+    radius * margin / math.sin(math.min(vHalf, hHalf))
+
+  /** Space left around the model at the initial framing. */
+  val FitMargin = 1.15
+
   def build(scene: Scene): Layout =
     val t        = scene.design.topology
     val twoStage = scene.stages.size == 2
