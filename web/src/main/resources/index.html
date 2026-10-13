@@ -252,6 +252,18 @@
       min-height: 380px; padding: 0.5rem;
     }
     .schematic svg { width: 100%; height: 100%; min-height: 360px; display: block; }
+    .seg-group { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    .seg { background: var(--panel-2); color: var(--muted); border: 0; padding: 0.2rem 0.65rem; font: inherit; font-size: 0.78rem; cursor: pointer; }
+    .seg + .seg { border-left: 1px solid var(--border); }
+    .seg:hover { background: var(--hover); }
+    .seg.active { background: var(--accent); color: #fff; }
+    .three-view { position: relative; width: 100%; height: 100%; min-height: 360px; }
+    .three-host { position: absolute; inset: 0; }
+    .three-host canvas { cursor: grab; }
+    .three-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 1rem; color: var(--text); font-size: 0.9rem; pointer-events: none; }
+    .three-msg:empty { display: none; }
+    .three-legend { position: absolute; left: 0.5rem; bottom: 0.4rem; display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; font: 0.7rem ui-monospace, monospace; color: var(--svg-sub); pointer-events: none; }
+    .three-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 0.3rem; vertical-align: baseline; }
 
     .results-panel { padding: 0; overflow: hidden; }
     .results-panel .panel-header { padding: 0.85rem 1rem 0.4rem 1rem; margin: 0; }
@@ -476,6 +488,7 @@
     <span class="badge">Scala 3 · Scala.js · Laminar</span>
   </header>
   <div id="app"></div>
+  <script src="./vendor/three/three.min.js"></script>
   <script src="./main.js"></script>
 </body>
 </html>

@@ -2,11 +2,12 @@ package cpgc.web
 
 import com.raquo.laminar.api.L.*
 import com.raquo.laminar.api.L.svg as s
-import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
+import cpgc.constraints.{BodyRole, Coupling, Topology}
 import cpgc.domain.{CompoundDesign, Mode, Stage}
 import cpgc.kinematics.{BodyAngles, Kinematics}
-import cpgc.render.Phasing
-import cpgc.web.SchematicLayout.{rotateXform, toRad}
+import cpgc.web.GearboxScene.{Gear, StageScene}
+import cpgc.web.Palette.Tone
+import cpgc.web.SchematicLayout.rotateXform
 
 /** Animated SVG schematic. Static layout is rebuilt only when the selected
   * design changes; the per-frame `phase` signal only updates `transform`
@@ -14,62 +15,27 @@ import cpgc.web.SchematicLayout.{rotateXform, toRad}
   */
 object Schematic:
 
-  private val Stage1Ring   = "#118ab2"
-  private val Stage1Sun    = "#ffd166"
-  private val Stage1Planet = "#06d6a0"
-  private val Stage2Ring   = "#9d4edd"
-  private val Stage2Sun    = "#ff9f1c"
-  private val Stage2Planet = "#73d2de"
-  private val CarrierColor = "#8b949e"
-  // Coupling accents (amber, teal) are theme-aware: `defs()` embeds the light/dark pairs as
-  // custom properties on the schematic's <svg>, so the page's CSS needn't know them.
-  private val CouplingColors = Map(1 -> "var(--cpl1)", 2 -> "var(--cpl2)")
+  // One palette for both views (`Palette`); themed tones are CSS variables defined on the <svg> by `defs()`.
+  private val CouplingColors = Map(1 -> Palette.css(Tone.Cpl1), 2 -> Palette.css(Tone.Cpl2))
   private val StyleTag = com.raquo.laminar.tags.SvgTag[org.scalajs.dom.SVGElement]("style")
-  private val CouplingStyle =
-    """.cpgc-schem{--cpl1:#ffb000;--cpl2:#19c3b1}
-      |@media (prefers-color-scheme: light){.cpgc-schem{--cpl1:#b35c00;--cpl2:#007c7c}}""".stripMargin
+  private val CouplingStyle = Palette.styleBlock(".cpgc-schem")
   // Theme-aware colours come from the page's CSS variables (index.html).
   private val TextColor    = "var(--svg-text)"
   private val SubText      = "var(--svg-sub)"
-  private val InputColor   = "var(--role-input)"   // green accent — input body
-  private val OutputColor  = "var(--role-output)"  // blue accent — output body
-  private val FixedColor   = "var(--role-fixed)"   // red accent — grounded body
+  private val InputColor   = Palette.css(Tone.Input)   // green accent — input body
+  private val OutputColor  = Palette.css(Tone.Output)  // blue accent — output body
+  private val FixedColor   = Palette.css(Tone.Fixed)   // red accent — grounded body
   private val HubFill      = "var(--svg-hub)"
 
   /** Which role a body is highlighted for. */
   private enum Role:
     case Input, Output, Fixed, Plain
 
-  /** Role of each central body, derived once per render. */
-  private final case class Roles(
-      stage1Sun:     Role,
-      stage1Carrier: Role,
-      stage1Ring:    Role,
-      stage2Sun:     Role,
-      stage2Carrier: Role,
-      stage2Ring:    Role
-  )
-
-  private def rolesFor(t: Topology): Roles =
-    def renderRole(b: Body): Role = t.roles.get(b) match
-      case Some(BodyRole.Input)  => Role.Input
-      case Some(BodyRole.Output) => Role.Output
-      case Some(BodyRole.Fixed)  => Role.Fixed
-      case _                     => Role.Plain
-    Roles(
-      stage1Sun     = renderRole(Body.S1),
-      stage1Carrier = renderRole(Body.C1),
-      stage1Ring    = renderRole(Body.R1),
-      stage2Sun     = renderRole(Body.S2),
-      stage2Carrier = renderRole(Body.C2),
-      stage2Ring    = renderRole(Body.R2)
-    )
-
-  private def roleStrokeColor(role: Role, fallback: String): String = role match
-    case Role.Input  => InputColor
-    case Role.Output => OutputColor
-    case Role.Fixed  => FixedColor
-    case Role.Plain  => fallback
+  private def roleOf(r: Option[BodyRole]): Role = r match
+    case Some(BodyRole.Input)  => Role.Input
+    case Some(BodyRole.Output) => Role.Output
+    case Some(BodyRole.Fixed)  => Role.Fixed
+    case _                     => Role.Plain
 
   private def roleStrokeWidth(role: Role, base: Double): Double = role match
     case Role.Plain => base
@@ -208,30 +174,10 @@ object Schematic:
     val (cx1, cx2) = SchematicLayout.stageCenters(twoStage)
 
     val angles: Signal[BodyAngles] = phaseSignal.map(Kinematics.at(d, _))
-    val roles = rolesFor(topology)
-
-    // Tooth phasing shared with the OpenSCAD export, so drawn teeth mesh in every valid design.
-    val phasing = Phasing.solve(d)
-
-    val marks = SchematicLayout.couplingMarks(topology)
-    def slotOf(b: Body): Option[Int] = marks.bodies.get(b)
-
-    val s1 = stageGroup(d.stage1, cx1, "Stage 1", Stage1Sun, Stage1Planet, Stage1Ring,
-                        angles, stageIndex = 1, showSun = topology.s1Present, phasing = phasing.stage1,
-                        sunRole = roles.stage1Sun,
-                        carrierRole = roles.stage1Carrier,
-                        ringRole = roles.stage1Ring,
-                        sunSlot = slotOf(Body.S1), carrierSlot = slotOf(Body.C1),
-                        ringSlot = slotOf(Body.R1), planetSlot = marks.planets)
-    val s2 = d.stage2.zip(phasing.stage2).map((st2, ph2) =>
-      stageGroup(st2, cx2, "Stage 2", Stage2Sun, Stage2Planet, Stage2Ring,
-                 angles, stageIndex = 2,
-                 showSun = topology.s2Present, phasing = ph2,
-                 sunRole = roles.stage2Sun,
-                 carrierRole = roles.stage2Carrier,
-                 ringRole = roles.stage2Ring,
-                 sunSlot = slotOf(Body.S2), carrierSlot = slotOf(Body.C2),
-                 ringSlot = slotOf(Body.R2), planetSlot = marks.planets))
+    // Gears, counts, outlines, tones and roles all come from the shared scene.
+    val scene  = GearboxScene.of(d)
+    val s1 = stageGroup(scene.stages(0), cx1, "Stage 1", angles)
+    val s2 = scene.stages.lift(1).map(sc2 => stageGroup(sc2, cx2, "Stage 2", angles))
 
     val couplings =
       d.stage2.fold(Vector.empty[SvgElement]) { st2 =>
@@ -378,27 +324,9 @@ object Schematic:
 
 
 
-  /** External involute gear (sun, planet). */
-  private def involuteToothedGear(
-      cx: Double, cy: Double,
-      teeth: Int, modulePx: Double,
-      color: String,
-      rotateRad: Double = 0.0,
-      fillOpacity: Double = 0.55,
-      strokeWidth: Double = 0.6
-  ): SvgElement =
-    pathWithInsideStroke(SchematicLayout.externalGearPath(cx, cy, teeth, modulePx, rotateRad), color, fillOpacity, strokeWidth)
-
-  /** Internal involute ring gear. Teeth point inward. */
-  private def involuteRing(
-      cx: Double, cy: Double,
-      teeth: Int, modulePx: Double,
-      color: String,
-      rotateRad: Double = 0.0,
-      fillOpacity: Double = 0.0,
-      strokeWidth: Double = 0.7
-  ): SvgElement =
-    pathWithInsideStroke(SchematicLayout.internalGearPath(cx, cy, teeth, modulePx, rotateRad), color, fillOpacity, strokeWidth)
+  /** Toothed gear body from an outline path. */
+  private def toothedGear(pathD: String, color: String, fillOpacity: Double, strokeWidth: Double): SvgElement =
+    pathWithInsideStroke(pathD, color, fillOpacity, strokeWidth)
 
   /** Render a closed polygon path with an "inside" stroke. SVG has no native
     * `stroke-alignment: inside`, so we use the well-known clip-path workaround:
@@ -429,55 +357,41 @@ object Schematic:
     )
 
 
-  private def stageGroup(
-      stage: Stage,
-      cx: Double,
-      label: String,
-      sunColor: String,
-      planetColor: String,
-      ringColor: String,
-      angles: Signal[BodyAngles],
-      stageIndex: Int,
-      showSun: Boolean,
-      phasing: Phasing.StagePhasing,
-      sunRole: Role,
-      carrierRole: Role,
-      ringRole: Role,
-      sunSlot: Option[Int],
-      carrierSlot: Option[Int],
-      ringSlot: Option[Int],
-      planetSlot: Option[Int],
-  ): Vector[SvgElement] =
+  private def stageGroup(sc: StageScene, cx: Double, label: String, angles: Signal[BodyAngles]): Vector[SvgElement] =
+    val stage        = sc.stage
     val lay          = SchematicLayout.stageLayout(stage, cx)
+    val k            = lay.scale
     val mPx          = lay.mPx
-    val sunPitchR    = lay.sunPitchR
-    val planetPitchR = lay.planetPitchR
-    val ringPitchR   = lay.ringPitchR
     val ringOR       = lay.ringOR
-    val carrierR     = lay.carrierR
+    val carrierR     = k * sc.carrier.radius
+    val sunPitchR    = sc.sun.fold(0.0)(g => k * g.pitchR)
+    val planetPitchR = k * sc.planets.head.pitchR
+    val ringPitchR   = k * sc.ring.pitchR
+    val showSun      = sc.sun.isDefined
+    val sunRole      = roleOf(sc.sun.flatMap(_.role))
+    val ringRole     = roleOf(sc.ring.role)
+    val carrierRole  = roleOf(sc.carrier.role)
+    val sunSlot      = sc.sun.flatMap(_.coupling)
+    val ringSlot     = sc.ring.coupling
+    val carrierSlot  = sc.carrier.coupling
+    val planetSlot   = sc.planets.head.coupling
 
-    val sunSig: Signal[Double] = angles.map(b =>
-      if stageIndex == 1 then b.sun1 else b.sun2)
-    val carrierSig: Signal[Double] = angles.map(b =>
-      if stageIndex == 1 then b.carrier1 else b.carrier2)
-    val planetSpinSig: Signal[Double] = angles.map(b =>
-      if stageIndex == 1 then b.planet1Spin else b.planet2Spin)
-    val ringSig: Signal[Double] = angles.map(b =>
-      if stageIndex == 1 then b.ring1 else b.ring2)
+    // Scene mm -> drawing units: the stage's scale and axis position (`SchematicLayout.gearCentre` / `gearPath`).
+    def placed(g: Gear): String = SchematicLayout.gearPath(g, k, cx)
 
-    // A coupled body takes its coupling's colour unless it is the input/output/fixed body, whose marker colour wins;
-    // its coupling then shows as a band just outside the rim.
-    def baseColor(role: Role, slot: Option[Int], stageColor: String): String =
-      roleStrokeColor(role, slot.fold(stageColor)(CouplingColors))
+    val sunSig: Signal[Double]     = angles.map(a => sc.sun.fold(0.0)(GearboxScene.angle(_, a)))
+    val carrierSig: Signal[Double] = angles.map(GearboxScene.carrierAngle(sc, _))
+    val ringSig: Signal[Double]    = angles.map(GearboxScene.angle(sc.ring, _))
+
+    val ringStroke   = Palette.css(sc.ring.tone)
+    val ringStrokeW  = roleStrokeWidth(ringRole, 2.0)
+    val sunStroke    = sc.sun.fold("")(g => Palette.css(g.tone))
     def band(slot: Option[Int], r: Double): SvgElement = slot match
       case None => s.g()
       case Some(sl) =>
         s.circle(s.cx := f"$cx%.2f", s.cy := "0", s.r := f"$r%.2f", s.fill := "none",
                  s.stroke := CouplingColors(sl), s.strokeWidth := "2.2", s.strokeOpacity := "0.9",
                  svg.strokeDashArray := slotDash(sl), s.pointerEvents := "none")
-    val ringStroke   = baseColor(ringRole, ringSlot, ringColor)
-    val ringStrokeW  = roleStrokeWidth(ringRole, 2.0)
-    val sunStroke    = baseColor(sunRole, sunSlot, sunColor)
 
     // Dashed pitch circle
     def pitchCircle(centerX: Double, centerY: Double, radius: Double): SvgElement =
@@ -493,7 +407,7 @@ object Schematic:
     val ringTint = ringSlot.fold(s.g())(sl =>
       s.path(
         s.d := f"M ${cx + ringOR}%.2f 0 A $ringOR%.2f $ringOR%.2f 0 1 1 ${cx - ringOR}%.2f 0 A $ringOR%.2f $ringOR%.2f 0 1 1 ${cx + ringOR}%.2f 0 Z " +
-               SchematicLayout.internalGearPath(cx, 0, stage.set.ring.toInt, mPx, toRad(phasing.ring)),
+               placed(sc.ring),
         svg.fillRule := "evenodd", s.fill := CouplingColors(sl), s.fillOpacity := "0.22",
         svg.transform <-- ringSig.map(rotateXform(_, cx, 0)), s.pointerEvents := "none"))
 
@@ -509,7 +423,7 @@ object Schematic:
       // Inner pitch circle (faint)
       pitchCircle(cx, 0, ringPitchR),
       // Involute inner tooth profile, static phase from `Phasing` so every planet-ring mesh is tooth-in-gap.
-      involuteRing(cx, 0, stage.set.ring.toInt, mPx, ringStroke, rotateRad = toRad(phasing.ring))
+      toothedGear(placed(sc.ring), ringStroke, 0.0, 0.7)
     )
 
     // Role badge (IN / OUT) for the gear at (px, py), in role's colour.
@@ -548,8 +462,7 @@ object Schematic:
           s.fill := "url(#sun-glow)"
         ),
         pitchCircle(cx, 0, sunPitchR),
-        involuteToothedGear(cx, 0, stage.set.sun.toInt, mPx, sunStroke,
-          rotateRad = phasing.sun.fold(0.0)(toRad)),
+        toothedGear(placed(sc.sun.get), sunStroke, 0.55, 0.6),
         {
           val sunHubR = sunRole match
             case Role.Plain => 2.4
@@ -578,10 +491,10 @@ object Schematic:
 
     // Carrier: outer <g> rotates about stage center; planets sit inside at static
     // angles, with their own inner <g> handling per-planet spin in the carrier frame.
-    val carrierStroke = baseColor(carrierRole, carrierSlot, CarrierColor)
+    val carrierStroke = Palette.css(sc.carrier.tone)
     val carrierStrokeW = roleStrokeWidth(carrierRole, 1.2)
     val carrierOpacity = if carrierRole == Role.Plain && carrierSlot.isEmpty then "0.7" else "1.0"
-    val planetStroke   = baseColor(Role.Plain, planetSlot, planetColor)
+    val planetStroke   = Palette.css(sc.planets.head.tone)
     val carrierG = s.g(
       svg.transform <-- carrierSig.map(rotateXform(_, cx, 0)),
       // Coupled carrier: a solid band under the dashed circle, so it shows even when a role colour is drawn.
@@ -597,7 +510,8 @@ object Schematic:
         svg.strokeDashArray := "3 3", svg.strokeLineCap := "butt",
         s.strokeOpacity := carrierOpacity
       ),
-      lay.planets.zipWithIndex.flatMap { case ((pxC, pyC), i) =>
+      sc.planets.flatMap { pg =>
+        val (pxC, pyC) = SchematicLayout.gearCentre(pg, k, cx)
         // Carrier spoke (static within carrier <g>)
         val spoke = s.line(
           s.x1 := f"$cx%.2f", s.y1 := "0",
@@ -607,12 +521,9 @@ object Schematic:
         )
         // Planet body: spin relative to the carrier frame
         val planet = s.g(
-          svg.transform <-- planetSpinSig.combineWith(carrierSig).map { (ps, c) =>
-            rotateXform(ps - c, pxC, pyC)
-          },
+          svg.transform <-- angles.map(a => rotateXform(GearboxScene.angle(pg, a), pxC, pyC)),
           pitchCircle(pxC, pyC, planetPitchR),
-          involuteToothedGear(pxC, pyC, stage.set.planet.toInt, mPx, planetStroke,
-            rotateRad = toRad(phasing.planets(i))),
+          toothedGear(placed(pg), planetStroke, 0.55, 0.6),
           s.circle(s.cx := f"$pxC%.2f", s.cy := f"$pyC%.2f", s.r := "1.6",
                    s.fill := HubFill, s.stroke := planetStroke, s.strokeWidth := "0.6")
         )
@@ -637,8 +548,8 @@ object Schematic:
       case _          => roleBadge(carrierRole, lay.carrierBadge._1, lay.carrierBadge._2)
 
     val labelText =
-      val pr = s"P${stage.set.planet.toInt} R${stage.set.ring.toInt}"
-      if showSun then s"$label · S${stage.set.sun.toInt} $pr" else s"$label · $pr"
+      val pr = s"P${sc.planets.head.teeth} R${sc.ring.teeth}"
+      sc.sun.fold(s"$label · $pr")(g => s"$label · S${g.teeth} $pr")
     val labelEl = s.text(
       s.x := f"$cx%.2f", s.y := f"${lay.labelY}%.2f", s.textAnchor := "middle",
       s.fill := SubText, s.fontSize := "11", s.fontFamily := "ui-monospace, monospace",
