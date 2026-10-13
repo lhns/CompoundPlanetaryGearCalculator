@@ -31,11 +31,11 @@ class InputRobustnessSpec extends FunSuite:
 
   for c <- cases do
     // Observed: java.lang.IllegalArgumentException "Module must be positive and finite, got 0.0" from Module.apply
-    test(s"B7 firstStageOD = 0 does not throw [${c.name}]".fail) {
+    test(s"B7 firstStageOD = 0 does not throw [${c.name}]") {
       noThrow(c.config(base.copy(firstStageOD = 0.0)), "OD=0")
     }
     // Observed: IllegalArgumentException "Module must be positive and finite, got -0.xx"
-    test(s"B7 firstStageOD < 0 does not throw [${c.name}]".fail) {
+    test(s"B7 firstStageOD < 0 does not throw [${c.name}]") {
       noThrow(c.config(base.copy(firstStageOD = -50.0)), "OD<0")
     }
     test(s"minModule = 0 does not throw [${c.name}]") {

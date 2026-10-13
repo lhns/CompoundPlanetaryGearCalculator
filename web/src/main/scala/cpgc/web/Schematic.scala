@@ -196,14 +196,14 @@ object Schematic:
     val roles = rolesFor(topology, twoStage)
 
     val s1 = stageGroup(d.stage1, cx1, "Stage 1", Stage1Sun, Stage1Planet, Stage1Ring,
-                        angles, stageIndex = 1, showSun = true,
+                        angles, stageIndex = 1, showSun = topology.s1Present,
                         sunRole = roles.stage1Sun,
                         carrierRole = roles.stage1Carrier,
                         ringRole = roles.stage1Ring)
     val s2 = d.stage2.map(st2 =>
       stageGroup(st2, cx2, "Stage 2", Stage2Sun, Stage2Planet, Stage2Ring,
                  angles, stageIndex = 2,
-                 showSun = topology.secondSunPresent,
+                 showSun = topology.s2Present,
                  sunRole = roles.stage2Sun,
                  carrierRole = Role.Plain,
                  ringRole = roles.stage2Ring))
@@ -283,11 +283,12 @@ object Schematic:
         )
 
   private def headerBanner(d: CompoundDesign): Vector[SvgElement] =
-    val title = d.mode match
-      case Mode.SingleStage => "Single-stage planetary"
-      case Mode.Standard    => "Compound planetary (sun-driven)"
-      case Mode.CDCP        => "Carrier-driven compound planetary"
-      case Mode.NSS         => "Compound planetary (no second sun)"
+    val title = d.topology.legacyMode match
+      case Some(Mode.SingleStage) => "Single-stage planetary"
+      case Some(Mode.Standard)    => "Compound planetary (sun-driven)"
+      case Some(Mode.CDCP)        => "Carrier-driven compound planetary"
+      case Some(Mode.NSS)         => "Compound planetary (no second sun)"
+      case None                   => if d.stage2.isEmpty then "Single-stage planetary (custom roles)" else "Compound planetary (custom topology)"
     Vector(
       s.text(
         s.x := "0", s.y := "-138", s.textAnchor := "middle",

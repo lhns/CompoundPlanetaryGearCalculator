@@ -1,7 +1,7 @@
 package cpgc.verify
 
 import cpgc.constraints.{Body, BodyRole, Coupling, SearchConfig, TeethBounds, Topology}
-import cpgc.domain.{GearSet, Mode, Teeth}
+import cpgc.domain.{GearSet, Teeth}
 import cpgc.physics.PlanetSpacing
 import cpgc.search.{Compounder, RoleSolver}
 import munit.FunSuite
@@ -33,10 +33,9 @@ class RoundTripSpec extends FunSuite:
   private val Tol  = 1e-6
 
   /** Wide bounds so the inverse search space comfortably contains `s2`. */
-  private def cfgFor(mode: Mode, topo: Topology): SearchConfig =
+  private def cfgFor(topo: Topology): SearchConfig =
     SearchConfig(
-      mode        = mode,
-      topology    = Some(topo),
+      topology    = topo,
       sunTeeth    = TeethBounds(6, 90),
       planetTeeth = TeethBounds(6, 40),
       ringTeeth   = TeethBounds(20, 200),
@@ -58,7 +57,7 @@ class RoundTripSpec extends FunSuite:
       val p = rng.between(8, 28)
       val r = s + 2 * p
       val candidate = GearSet(Teeth(s), Teeth(p), n)
-      if (s + r) % n == 0 && PlanetSpacing.planetsFitWithoutOverlap(candidate) then
+      if (s + r) % n == 0 && PlanetSpacing.planetsFitWithoutOverlap(candidate, SearchConfig.DefaultPlanetClearance) then
         return candidate
       attempts += 1
     GearSet(Teeth(40), Teeth(10), n) // (40+60)%n==0 for n∈{4,5}; planets fit
@@ -78,17 +77,17 @@ class RoundTripSpec extends FunSuite:
       secondCoupling = second
     )
 
-  /** (label, mode, topology) — the closed-form inverse paths under test. */
-  private val cases: Vector[(String, Mode, Topology)] = Vector(
-    ("Standard",  Mode.Standard, Topology.standardCompound),
-    ("CDCP",      Mode.CDCP,     Topology.cdcpCompound),
-    ("RingToSun", Mode.Standard, compound(Coupling.RingToSun))
+  /** (label, topology) — the closed-form inverse paths under test. */
+  private val cases: Vector[(String, Topology)] = Vector(
+    ("Standard",  Topology.standardCompound),
+    ("CDCP",      Topology.cdcpCompound),
+    ("RingToSun", compound(Coupling.RingToSun))
   )
 
-  for (label, mode, topo) <- cases do
+  for (label, topo) <- cases do
     test(s"forward→inverse→forward round-trips for $label") {
       val rng = new Random(Seed)
-      val cfg = cfgFor(mode, topo)
+      val cfg = cfgFor(topo)
       var tested  = 0
       val misses  = scala.collection.mutable.ArrayBuffer.empty[String]
 

@@ -1,7 +1,7 @@
 package cpgc.verify
 
 import cpgc.constraints.{Body, BodyRole, Coupling, SearchConfig, Topology}
-import cpgc.domain.{GearSet, Mode, Teeth, Validity}
+import cpgc.domain.{GearSet, Teeth, Validity}
 import cpgc.search.Compounder
 import munit.FunSuite
 
@@ -28,26 +28,9 @@ class DecoupledStageSpec extends FunSuite:
 
   /** Build a SearchConfig that surely doesn't filter out our gear samples. */
   private val cfg: SearchConfig = SearchConfig(
-    mode            = Mode.Standard,
     sunPlanetFactor = 1e9,
     minModule       = 0.0001
   )
-
-  private def standardRoles(c1: Coupling, c2: Coupling, out: Body = Body.R2): Topology =
-    Topology(
-      stages = 2,
-      roles = Map(
-        Body.S1 -> BodyRole.Input,
-        out     -> BodyRole.Output,
-        Body.R1 -> BodyRole.Fixed,
-        Body.C1 -> BodyRole.Free,
-        Body.S2 -> BodyRole.Free,
-        Body.C2 -> BodyRole.Free
-      ).filterNot { case (b, _) => b == out && b == Body.C1 } // no-op for our usages
-       .updated(out, BodyRole.Output),
-      firstCoupling  = c1,
-      secondCoupling = c2
-    )
 
   test("stage-2-decoupled warning fires on {CarrierToCarrier, CarrierToRing}") {
     // The 8-pair single-stage-equivalent class includes this. With R2 = output
@@ -66,7 +49,7 @@ class DecoupledStageSpec extends FunSuite:
       firstCoupling  = Coupling.CarrierToCarrier,
       secondCoupling = Coupling.CarrierToRing
     )
-    val d = Compounder.compound(cfg.copy(topology = Some(topo)), s1, s2)
+    val d = Compounder.compound(cfg.copy(topology = topo), s1, s2)
     assert(d.isDefined, "expected a design for this coupling pair")
     assert(
       d.get.validity.isInstanceOf[Validity.Warning] &&
@@ -91,7 +74,7 @@ class DecoupledStageSpec extends FunSuite:
       firstCoupling  = Coupling.CarrierToCarrier,
       secondCoupling = Coupling.SunToRing
     )
-    val d = Compounder.compound(cfg.copy(topology = Some(topo)), s1, s2)
+    val d = Compounder.compound(cfg.copy(topology = topo), s1, s2)
     assert(d.isDefined)
     val v = d.get.validity
     assert(
@@ -112,7 +95,7 @@ class DecoupledStageSpec extends FunSuite:
 
   test("no degeneracy warning on a genuinely-distinct compound (classic Standard)") {
     val topo = Topology.standardCompound
-    val d = Compounder.compound(cfg.copy(topology = Some(topo)), s1, s2)
+    val d = Compounder.compound(cfg.copy(topology = topo), s1, s2)
     assert(d.isDefined)
     assert(!hasDegeneracyWarning(d.get.validity),
       s"classic Standard should not be flagged decoupled/passthrough, got ${d.get.validity}")
@@ -132,8 +115,31 @@ class DecoupledStageSpec extends FunSuite:
       firstCoupling  = Coupling.CarrierToSun,
       secondCoupling = Coupling.RingToRing
     )
-    val d = Compounder.compound(cfg.copy(topology = Some(topo)), s1, s2)
+    val d = Compounder.compound(cfg.copy(topology = topo), s1, s2)
     assert(d.isDefined, "Ravigneaux should produce a design")
     assert(!hasDegeneracyWarning(d.get.validity),
       s"Ravigneaux should not trigger a decoupled/passthrough warning, got ${d.get.validity}")
+  }
+
+  test("a non-stacked sun-less stage only carries its ring through: stage-2 decoupled warning") {
+    // S2 absent, R1 welded to R2, carriers shared: with C1 fixed and R1 the
+    // output, stage 2's planet just idles, so its gears can't change the ratio.
+    val topo = Topology(
+      stages = 2,
+      roles = Map(
+        Body.S1 -> BodyRole.Input,
+        Body.R1 -> BodyRole.Output,
+        Body.C1 -> BodyRole.Fixed,
+        Body.S2 -> BodyRole.Absent,
+        Body.C2 -> BodyRole.Free,
+        Body.R2 -> BodyRole.Free
+      ),
+      firstCoupling  = Coupling.CarrierToCarrier,
+      secondCoupling = Coupling.RingToRing
+    )
+    val d = Compounder.compound(cfg.copy(topology = topo), s1, s2)
+    assert(d.isDefined)
+    d.get.validity match
+      case Validity.Warning(r) => assert(r.contains("stage-2 decoupled"), r)
+      case other               => fail(s"expected the decoupled warning, got $other")
   }

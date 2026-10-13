@@ -1,7 +1,7 @@
 package cpgc.search
 
 import cpgc.constraints.{Body, BodyRole, SearchConfig, TeethBounds, Topology}
-import cpgc.domain.{GearSet, Mode, Ratio, Teeth}
+import cpgc.domain.{GearSet, Ratio, Teeth}
 import munit.FunSuite
 
 class RoleInverseSolverSpec extends FunSuite:
@@ -9,7 +9,6 @@ class RoleInverseSolverSpec extends FunSuite:
   /** Compound topology — Standard layout but specified as a Topology so the
     * dispatcher routes via the legacy-tuple path. */
   private val standardCfg = SearchConfig(
-    mode         = Mode.Standard,
     sunTeeth     = TeethBounds(10, 30),
     planetTeeth  = TeethBounds(8, 20),
     ringTeeth    = TeethBounds(30, 100),
@@ -17,7 +16,7 @@ class RoleInverseSolverSpec extends FunSuite:
     firstStageOD = 150.0,
     minModule    = 0.3,
     targets      = Seq(Ratio(50.0)),
-    topology     = Some(Topology.standardCompound)
+    topology     = Topology.standardCompound
   )
 
   /** A novel compound topology: S1-input + R2-output + S2-fixed, with the
@@ -44,11 +43,11 @@ class RoleInverseSolverSpec extends FunSuite:
     // R=48, (24+48)%3=72%3=0 ✓.
     val stage1 = GearSet(Teeth(24), Teeth(12), 3)
     for legacy <- Seq(Topology.standardCompound, Topology.cdcpCompound, Topology.nssCompound) do
-      val cfg = standardCfg.copy(topology = Some(legacy), mode = legacy.legacyMode.get)
+      val cfg = standardCfg.copy(topology = legacy)
       val candidates = Compounder.stage2For(50.0, stage1, cfg).toVector
       // closed forms ALWAYS produce 1 candidate per Tp2 in range (or 0 if it
       // fails the filter); we just need ≥ 1 to confirm the path is alive.
-      assert(candidates.nonEmpty || cfg.mode == Mode.CDCP, // CDCP may not reach 50 with this stage 1
+      assert(candidates.nonEmpty || legacy == Topology.cdcpCompound, // CDCP may not reach 50 with this stage 1
         s"$legacy: closed form returned 0 candidates for target 50")
   }
 
@@ -58,8 +57,7 @@ class RoleInverseSolverSpec extends FunSuite:
     // dominates). 0.5 is comfortably reachable.
     val target = 0.5
     val cfg = standardCfg.copy(
-      topology = Some(novelTopology),
-      mode     = Mode.Standard,           // legacy fallback, but topology overrides
+      topology = novelTopology,
       targets  = Seq(Ratio(target))
     )
     val stage1 = GearSet(Teeth(24), Teeth(18), 3) // R1 = 60
@@ -71,8 +69,7 @@ class RoleInverseSolverSpec extends FunSuite:
   test("brute-force candidates have ratios within tolerance of target") {
     val target = 0.5
     val cfg = standardCfg.copy(
-      topology = Some(novelTopology),
-      mode     = Mode.Standard,
+      topology = novelTopology,
       targets  = Seq(Ratio(target))
     )
     val stage1 = GearSet(Teeth(24), Teeth(18), 3)

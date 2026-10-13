@@ -30,8 +30,8 @@ class CompounderSpec extends FunSuite:
     val cfg = SearchConfig(firstStageOD = 150.0)
     val a = GearSet(Teeth(20), Teeth(15), 3) // ring=50
     val b = GearSet(Teeth(22), Teeth(14), 3) // ring=50
-    val (m1, _) = Compounder.matchModules(cfg, a, b)
-    assertEqualsDouble(m1.value * (a.ring.toDouble + 2.0), 150.0, 1e-9)
+    val (m1, _) = Compounder.matchModules(cfg, a, b, stacked = true).get
+    assertEqualsDouble(m1.value * (a.ring.toDouble + 2.5) + 2.0 * cfg.ringWall, 150.0, 1e-9)
   }
 
   test("CDCP carrier-driven ratio differs from Standard sun-driven for the same gears") {

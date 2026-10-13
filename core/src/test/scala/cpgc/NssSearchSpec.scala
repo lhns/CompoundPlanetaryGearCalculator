@@ -3,7 +3,7 @@ package cpgc
 import cpgc.constraints.{SearchConfig, TeethBounds, Topology}
 import cpgc.domain.{GearSet, Mode, Ratio, Teeth}
 import cpgc.physics.Efficiency
-import cpgc.search.{Compounder, Enumerator, RoleSolver}
+import cpgc.search.{Compounder, RoleSolver}
 import munit.FunSuite
 
 /** Tests that NSS is the design-space superset its physical interpretation
@@ -14,7 +14,7 @@ import munit.FunSuite
 class NssSearchSpec extends FunSuite:
 
   private val baseCfg = SearchConfig(
-    mode         = Mode.Standard,
+    topology         = Topology.fromMode(Mode.Standard),
     sunTeeth     = TeethBounds(10, 30),
     planetTeeth  = TeethBounds(8, 20),
     ringTeeth    = TeethBounds(30, 100),
@@ -23,16 +23,10 @@ class NssSearchSpec extends FunSuite:
     minModule    = 0.3
   )
 
-  // Helper — collect all designs found by the cross-product search for a mode.
+  // Helper — collect all designs found by the exhaustive search for a mode.
   private def designsFor(mode: Mode): Vector[(GearSet, GearSet)] =
-    val cfg = baseCfg.copy(mode = mode)
-    val stages = Enumerator.gearSets(cfg).toVector
-    for
-      a <- stages
-      b <- stages
-      if a != b
-      d <- Compounder.compound(cfg, a, b)
-    yield (d.stage1.set, d.stage2.get.set)
+    val cfg = baseCfg.copy(topology = Topology.fromMode(mode))
+    Calculator.search(cfg).map(d => (d.stage1.set, d.stage2.get.set)).toVector
 
   test("NSS designs ⊇ Standard designs (every Standard-found pair is also NSS-found)") {
     val standardPairs = designsFor(Mode.Standard).toSet
@@ -55,7 +49,7 @@ class NssSearchSpec extends FunSuite:
     // works in NSS because we now store the real S2 from enumeration.
     val s1 = GearSet(Teeth(20), Teeth(15), 3)
     val s2 = GearSet(Teeth(14), Teeth(12), 3)
-    val (m1, m2) = Compounder.matchModules(baseCfg, s1, s2)
+    val (m1, m2) = Compounder.matchModules(baseCfg, s1, s2, stacked = true).get
     val expected = m1.value * (s1.sun.toDouble + s1.planet.toDouble) /
                    (s2.sun.toDouble + s2.planet.toDouble)
     assertEqualsDouble(m2.value, expected, 1e-12)
@@ -66,7 +60,7 @@ class NssSearchSpec extends FunSuite:
     val s1Bad = GearSet(Teeth(10), Teeth(10), 3)
     assert(!s1Bad.evenSpacing, "preconditions: chosen stage 1 should not pass Willis")
     val s2    = GearSet(Teeth(14), Teeth(12), 3) // ring=38; (14+38)%3=52%3=1, also fails — fine
-    val cfg   = baseCfg.copy(mode = Mode.NSS)
+    val cfg   = baseCfg.copy(topology = Topology.fromMode(Mode.NSS))
     val d     = Compounder.compound(cfg, s1Bad, s2)
     assertEquals(d, None, "NSS should reject when stage-1 spacing fails")
   }
@@ -80,8 +74,8 @@ class NssSearchSpec extends FunSuite:
     val s2 = GearSet(Teeth(14), Teeth(8), 3)
     assert(!s2.evenSpacing)
     // Also need r12 ≠ 0: r12 = (R2 − (R1/P1)·P2) / R2. R1/P1 = 36/12 = 3. r12 = (30 − 24)/30 = 0.2 ✓
-    val cfgStd = baseCfg.copy(mode = Mode.Standard)
-    val cfgNss = baseCfg.copy(mode = Mode.NSS)
+    val cfgStd = baseCfg.copy(topology = Topology.fromMode(Mode.Standard))
+    val cfgNss = baseCfg.copy(topology = Topology.fromMode(Mode.NSS))
     val stdResult = Compounder.compound(cfgStd, s1, s2)
     val nssResult = Compounder.compound(cfgNss, s1, s2)
     assertEquals(stdResult, None, "Standard should reject when stage-2 spacing fails")
@@ -101,16 +95,14 @@ class NssSearchSpec extends FunSuite:
   }
 
   test("NSS efficiency strictly exceeds Standard efficiency for the same triple") {
-    val s1 = GearSet(Teeth(20), Teeth(15), 3)
-    val s2 = GearSet(Teeth(15), Teeth(15), 3)
-    val effStd = Efficiency.overall(s1, Some(s2), Mode.Standard)
-    val effNss = Efficiency.overall(s1, Some(s2), Mode.NSS)
+    val effStd = Efficiency.overall(Topology.standardCompound)
+    val effNss = Efficiency.overall(Topology.nssCompound)
     assert(effNss > effStd, s"NSS efficiency ($effNss) should exceed Standard ($effStd)")
   }
 
   test("NSS targeted inverse solver returns designs near the target ratio") {
     val cfg = baseCfg.copy(
-      mode    = Mode.NSS,
+      topology    = Topology.fromMode(Mode.NSS),
       targets = Seq(Ratio(40.0))
     )
     // Stage 1 must pass single-stage Willis: pick (24,12,3) → R=48, (24+48)%3=0 ✓.
