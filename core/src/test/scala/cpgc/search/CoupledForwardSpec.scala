@@ -85,8 +85,7 @@ class CoupledForwardSpec extends FunSuite:
     import cpgc.constraints.{SearchConfig, TeethBounds}
     import cpgc.domain.Ratio
     val cfg = SearchConfig(
-      mode        = cpgc.domain.Mode.Standard,
-      topology    = Some(topology(Coupling.RingToSun)),
+      topology    = topology(Coupling.RingToSun),
       sunTeeth    = TeethBounds(8, 80),
       planetTeeth = TeethBounds(8, 30),
       ringTeeth   = TeethBounds(20, 120),

@@ -1,7 +1,7 @@
 package cpgc.verify
 
 import cpgc.constraints.{Body, BodyRole, Coupling, SearchConfig, TeethBounds, Topology}
-import cpgc.domain.{CompoundDesign, Mode}
+import cpgc.domain.CompoundDesign
 import cpgc.kinematics.{BodyAngles, Kinematics}
 import cpgc.search.{Compounder, Enumerator, RoleSolver}
 import munit.FunSuite
@@ -30,6 +30,7 @@ class AnimationConsistencySpec extends FunSuite:
   )
   private val novel: Seq[(String, Topology)] = Seq(
     "ring-to-sun"      -> ringToSun,
+    "sunless-cdcp"     -> Topology.sunlessCdcpCompound,
     "ravigneaux"       -> ravigneaux,
     "simpson"          -> simpson
   )
@@ -37,8 +38,7 @@ class AnimationConsistencySpec extends FunSuite:
   /** Designs built from valid (enumerated, spacing-checked) gear sets. */
   private def designs(t: Topology): Seq[CompoundDesign] =
     val cfg = SearchConfig(
-      mode         = t.legacyMode.getOrElse(Mode.Standard),
-      topology     = Some(t),
+      topology     = t,
       sunTeeth     = TeethBounds(10, 24),
       planetTeeth  = TeethBounds(8, 14),
       ringTeeth    = TeethBounds(30, 80),
@@ -46,10 +46,11 @@ class AnimationConsistencySpec extends FunSuite:
       minModule    = 0.01,
       sunPlanetFactor = 1e9
     )
-    val sets = Enumerator.gearSets(cfg).take(40).toVector
+    val sets1 = Enumerator.stage1Sets(cfg).take(40).toVector
+    val sets2 = Enumerator.stage2Sets(cfg).take(40).toVector
     val ds =
-      if t.stages == 1 then sets.flatMap(Compounder.single(cfg, _))
-      else for a <- sets; b <- sets if a != b; d <- Compounder.compound(cfg, a, b).toList yield d
+      if t.stages == 1 then sets1.flatMap(Compounder.single(cfg, _))
+      else for a <- sets1; b <- sets2 if a != b; d <- Compounder.compound(cfg, a, b).toList yield d
     val picked = ds.take(30)
     assert(picked.size >= 3, s"too few designs for $t: ${picked.size}")
     picked
@@ -89,8 +90,7 @@ class AnimationConsistencySpec extends FunSuite:
           val b = Kinematics.at(d, phi, t)
           assertEqualsDouble(b.carrier2, b.carrier1, 1e-9)
 
-  // Kinematics.io keys on `d.mode`, which the UI sets to Standard for novel
-  // topologies, so it returns (S1, R2) regardless of the real input/output.
+  // Kinematics.io reads the design topology's input/output bodies (P5).
   private def ioMatchesTopology(name: String, t: Topology): Unit =
     for d <- designs(t); phi <- phis do
       val b = Kinematics.at(d, phi, t)
@@ -105,10 +105,11 @@ class AnimationConsistencySpec extends FunSuite:
   test("ring-to-sun: Kinematics.io returns the topology's input/output bodies (same roles as Standard)"):
     ioMatchesTopology("ring-to-sun", ringToSun)
 
-  test("ravigneaux: Kinematics.io returns the topology's input/output bodies".fail):
-    // observed: output is ring2 (Standard's R2) instead of carrier2
+  test("ravigneaux: Kinematics.io returns the topology's input/output bodies"):
     ioMatchesTopology("ravigneaux", ravigneaux)
 
-  test("simpson: Kinematics.io returns the topology's input/output bodies".fail):
-    // observed: output is ring2 (Standard's R2) instead of carrier2
+  test("simpson: Kinematics.io returns the topology's input/output bodies"):
     ioMatchesTopology("simpson", simpson)
+
+  test("sun-less CDCP: Kinematics.io returns the topology's input/output bodies"):
+    ioMatchesTopology("sunless-cdcp", Topology.sunlessCdcpCompound)

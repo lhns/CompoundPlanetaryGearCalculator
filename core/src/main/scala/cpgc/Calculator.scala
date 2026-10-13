@@ -1,7 +1,7 @@
 package cpgc
 
 import cpgc.constraints.SearchConfig
-import cpgc.domain.{CompoundDesign, Mode, Ratio}
+import cpgc.domain.{CompoundDesign, Ratio}
 import cpgc.search.{Compounder, Enumerator, Scorer, SearchSteps}
 
 object Calculator:
@@ -15,37 +15,33 @@ object Calculator:
   def searchSteps(cfg: SearchConfig): Iterator[Option[CompoundDesign]] =
     SearchSteps.forConfig(cfg)
 
-  /** Lazy stream of all valid designs implied by `cfg`. */
-  def search(cfg: SearchConfig): LazyList[CompoundDesign] = cfg.mode match
-    case Mode.SingleStage =>
-      Enumerator.gearSets(cfg).flatMap(Compounder.single(cfg, _))
-    case _ =>
-      // All multi-stage modes share the same single-stage candidate pool.
-      // Per-mode spacing rules are applied inside `Compounder.compound`:
-      // Standard requires both stages' Willis; NSS only stage 1's; CDCP
-      // neither.
-      val stages = Enumerator.gearSets(cfg).toVector
+  /** Lazy stream of all valid designs implied by `cfg.topology`. Stage 1 is
+    * drawn from the stage-1 pool and stage 2 from the stage-2 pool (they differ
+    * when only one stage has a sun). Spacing, stacking and module rules are
+    * applied inside `Compounder`. */
+  def search(cfg: SearchConfig): LazyList[CompoundDesign] =
+    if cfg.topology.stages == 1 then
+      Enumerator.stage1Sets(cfg).flatMap(Compounder.single(cfg, _))
+    else
+      val pool1   = Enumerator.stage1Sets(cfg).toVector
+      val samePool = cfg.topology.s1Present == cfg.topology.s2Present
+      val pool2   = if samePool then pool1 else Enumerator.stage2Sets(cfg).toVector
       for
-        a <- stages.to(LazyList)
-        b <- stages.to(LazyList)
-        if a != b
+        a <- pool1.to(LazyList)
+        b <- pool2.to(LazyList)
+        if !(samePool && a == b)
         d <- Compounder.compound(cfg, a, b)
       yield d
 
   /** Targeted compound search using the inverse-solver fast path. For each
-    * stage-1 candidate from the enumerator, algebraically derive stage-2
-    * candidates that produce ratios close to each target. ~50× faster than
-    * full O(K²) pair enumeration for typical bounds.
-    *
-    * For NSS the inverse formula is identical (Ts2 doesn't appear) but the
-    * stage-2 validity check skips the sun-range and uses ring-only spacing
-    * `Tr2 % N == 0`. See `Compounder.stage2For` for the per-mode branching.
+    * stage-1 candidate, derive stage-2 candidates whose ratio is close to each
+    * target (`Compounder.stage2For`). Faster than the full pair enumeration but
+    * not complete (bug register B4; replaced in milestone B).
     */
   def searchTargeted(cfg: SearchConfig): LazyList[CompoundDesign] =
-    if cfg.mode == Mode.SingleStage then search(cfg)
-    else if cfg.targets.isEmpty then search(cfg)
+    if cfg.topology.stages == 1 || cfg.targets.isEmpty then search(cfg)
     else
-      val stage1s = Enumerator.gearSets(cfg).toVector
+      val stage1s = Enumerator.stage1Sets(cfg).toVector
       val targets = cfg.targets.map(_.value)
       for
         a <- stage1s.to(LazyList)

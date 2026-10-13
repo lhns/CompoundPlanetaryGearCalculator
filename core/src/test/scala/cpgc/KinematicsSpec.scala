@@ -1,6 +1,6 @@
 package cpgc
 
-import cpgc.constraints.{SearchConfig, TeethBounds}
+import cpgc.constraints.{SearchConfig, TeethBounds, Topology}
 import cpgc.domain.{Mode, Ratio}
 import cpgc.kinematics.Kinematics
 import munit.FunSuite
@@ -27,7 +27,7 @@ class KinematicsSpec extends FunSuite:
 
   test("single-stage ratio observed from kinematics matches design.ratio") {
     assertRatioMatches("SingleStage", SearchConfig(
-      mode        = Mode.SingleStage,
+      topology        = Topology.fromMode(Mode.SingleStage),
       sunTeeth    = TeethBounds(10, 30),
       planetTeeth = TeethBounds(10, 18),
       ringTeeth   = TeethBounds(40, 80),
@@ -37,7 +37,7 @@ class KinematicsSpec extends FunSuite:
 
   test("standard compound ratio observed from kinematics matches design.ratio") {
     assertRatioMatches("Standard", SearchConfig(
-      mode        = Mode.Standard,
+      topology        = Topology.fromMode(Mode.Standard),
       sunTeeth    = TeethBounds(10, 24),
       planetTeeth = TeethBounds(10, 16),
       ringTeeth   = TeethBounds(40, 60),
@@ -47,7 +47,7 @@ class KinematicsSpec extends FunSuite:
 
   test("CDCP ratio observed from kinematics matches design.ratio") {
     assertRatioMatches("CDCP", SearchConfig(
-      mode        = Mode.CDCP,
+      topology        = Topology.fromMode(Mode.CDCP),
       sunTeeth    = TeethBounds(10, 30),
       planetTeeth = TeethBounds(10, 16),
       ringTeeth   = TeethBounds(40, 60),
@@ -57,7 +57,7 @@ class KinematicsSpec extends FunSuite:
 
   test("NSS ratio observed from kinematics matches design.ratio") {
     assertRatioMatches("NSS", SearchConfig(
-      mode        = Mode.NSS,
+      topology        = Topology.fromMode(Mode.NSS),
       sunTeeth    = TeethBounds(10, 24),
       planetTeeth = TeethBounds(10, 16),
       ringTeeth   = TeethBounds(40, 60),
@@ -66,7 +66,7 @@ class KinematicsSpec extends FunSuite:
   }
 
   test("zero input ⇒ zero everywhere") {
-    val cfg = SearchConfig(mode = Mode.SingleStage, sunTeeth = TeethBounds(10, 12),
+    val cfg = SearchConfig(topology = Topology.fromMode(Mode.SingleStage), sunTeeth = TeethBounds(10, 12),
       planetTeeth = TeethBounds(10, 12), ringTeeth = TeethBounds(34, 36), planets = TeethBounds(3, 3))
     val d = Calculator.search(cfg).head
     val b = Kinematics.at(d, 0.0)
@@ -76,7 +76,7 @@ class KinematicsSpec extends FunSuite:
   }
 
   test("linearity: at(d, 2φ) == 2 · at(d, φ) for every body") {
-    val cfg = SearchConfig(mode = Mode.Standard, sunTeeth = TeethBounds(10, 20),
+    val cfg = SearchConfig(topology = Topology.fromMode(Mode.Standard), sunTeeth = TeethBounds(10, 20),
       planetTeeth = TeethBounds(10, 14), ringTeeth = TeethBounds(40, 50), planets = TeethBounds(3, 3))
     val d = Calculator.search(cfg).head
     val b1 = Kinematics.at(d, 1.0)

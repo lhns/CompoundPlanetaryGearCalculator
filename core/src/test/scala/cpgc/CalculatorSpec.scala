@@ -1,6 +1,6 @@
 package cpgc
 
-import cpgc.constraints.{SearchConfig, TeethBounds}
+import cpgc.constraints.{SearchConfig, TeethBounds, Topology}
 import cpgc.domain.{Mode, Ratio}
 import munit.FunSuite
 
@@ -8,7 +8,7 @@ class CalculatorSpec extends FunSuite:
 
   test("single-stage search yields at least one design with default config") {
     val cfg = SearchConfig(
-      mode        = Mode.SingleStage,
+      topology        = Topology.fromMode(Mode.SingleStage),
       sunTeeth    = TeethBounds(8, 40),
       planetTeeth = TeethBounds(8, 20),
       ringTeeth   = TeethBounds(40, 100),
@@ -21,7 +21,7 @@ class CalculatorSpec extends FunSuite:
 
   test("compound search produces ranked best-matches per target") {
     val cfg = SearchConfig(
-      mode        = Mode.Standard,
+      topology        = Topology.fromMode(Mode.Standard),
       sunTeeth    = TeethBounds(10, 30),
       planetTeeth = TeethBounds(10, 18),
       ringTeeth   = TeethBounds(40, 80),
@@ -38,7 +38,7 @@ class CalculatorSpec extends FunSuite:
 
   test("determinism: identical config produces identical CSV") {
     val cfg = SearchConfig(
-      mode        = Mode.SingleStage,
+      topology        = Topology.fromMode(Mode.SingleStage),
       sunTeeth    = TeethBounds(10, 20),
       planetTeeth = TeethBounds(10, 14),
       ringTeeth   = TeethBounds(40, 60),

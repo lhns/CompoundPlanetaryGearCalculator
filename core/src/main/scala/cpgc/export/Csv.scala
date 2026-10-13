@@ -12,16 +12,18 @@ object Csv:
   def renderRow(d: CompoundDesign): String =
     val s1 = d.stage1
     val s2Cells = d.stage2 match
-      case Some(s) => stageCells(s)
+      case Some(s) => stageCells(s, d.topology.s2Present)
       case None    => ",,,"
-    s"${d.mode},${fmt(d.ratio.value)},${fmt(d.efficiency)}," +
+    s"${d.modeName},${fmt(d.ratio.value)},${fmt(d.efficiency)}," +
       s"${s1.set.numPlanets},${d.spacingOk}," +
-      stageCells(s1) + "," + s2Cells
+      stageCells(s1, d.topology.s1Present) + "," + s2Cells
 
   def render(designs: Iterable[CompoundDesign]): String =
     (Header +: designs.toSeq.map(renderRow)).mkString("\n")
 
-  private def stageCells(s: Stage): String =
-    s"${s.set.sun.toInt},${s.set.planet.toInt},${s.set.ring.toInt},${fmt(s.module.value)}"
+  /** A sun-less stage has no sun gear, so its sun cell is empty. */
+  private def stageCells(s: Stage, sunPresent: Boolean): String =
+    val sun = if sunPresent then s.set.sun.toInt.toString else ""
+    s"$sun,${s.set.planet.toInt},${s.set.ring.toInt},${fmt(s.module.value)}"
 
   private def fmt(d: Double): String = Numeric.fixed(d, 6)

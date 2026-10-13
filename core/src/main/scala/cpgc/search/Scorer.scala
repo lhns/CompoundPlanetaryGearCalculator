@@ -1,5 +1,6 @@
 package cpgc.search
 
+import cpgc.constraints.Topology
 import cpgc.domain.{CompoundDesign, Ratio}
 
 import scala.collection.mutable
@@ -36,13 +37,13 @@ object Scorer:
     val s2 = d.stage2.fold(0)(s => s.set.sun.toInt + s.set.planet.toInt + s.set.ring.toInt)
     s1.sun.toInt + s1.planet.toInt + s1.ring.toInt + s2
 
-  /** Canonical key for deduplication: tooth counts across both stages + mode. */
-  def canonicalKey(d: CompoundDesign): (String, Int, Int, Int, Int, Int, Int) =
+  /** Canonical key for deduplication: tooth counts across both stages + topology. */
+  def canonicalKey(d: CompoundDesign): (Topology, Int, Int, Int, Int, Int, Int) =
     val s1 = d.stage1.set
     val (s2s, s2p, s2r) = d.stage2 match
       case Some(st) => (st.set.sun.toInt, st.set.planet.toInt, st.set.ring.toInt)
       case None     => (0, 0, 0)
-    (d.mode.toString, s1.sun.toInt, s1.planet.toInt, s1.ring.toInt, s2s, s2p, s2r)
+    (d.topology, s1.sun.toInt, s1.planet.toInt, s1.ring.toInt, s2s, s2p, s2r)
 
   /** Sort an iterable of designs by the chosen criterion and deduplicate by
     * `canonicalKey`. Returns a materialised Vector. */

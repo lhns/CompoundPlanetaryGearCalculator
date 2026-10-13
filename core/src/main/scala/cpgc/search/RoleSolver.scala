@@ -3,55 +3,32 @@ package cpgc.search
 import cpgc.constraints.{Body, Coupling, Topology}
 import cpgc.domain.{GearSet, Ratio}
 
-/** Forward kinematic solver for a `Topology` over given tooth counts.
+/** Forward kinematic solver for a `Topology` over given tooth counts (ADR 0015 §3).
   *
-  * Body index in the unknown vector:
-  *   - single stage:  {S1, C1, R1}                  (3 unknowns)
-  *   - NSS (no S2):    {S1, C1, R1, R2}              (4 unknowns; carrier shared, modelled as C1)
-  *   - full compound:  {S1, C1, R1, S2, C2, R2}      (6 unknowns)
+  * Unknowns, in this order (see `Topology.bodySlot`): the bodies that are
+  * present among `S1, C1, R1, S2, C2, R2`, then the planet velocities `P1`
+  * (and `P2` for a compound). An Absent sun is simply not an unknown and has no
+  * mesh row; its stage keeps the ring mesh only.
   *
-  * The fundamental constraint equations, derived from each stage's two meshes
-  * (external sun↔planet and internal planet↔ring) with the planet velocity
-  * eliminated, are:
+  * Rows, per stage with sun `S`, planet `P`, carrier `C`, ring `R`:
   *
-  *   Willis stage 1:  Ts1·ωS1 + Tr1·ωR1 − (Ts1+Tr1)·ωC1 = 0
-  *   Willis stage 2:  Ts2·ωS2 + Tr2·ωR2 − (Ts2+Tr2)·ωC2 = 0    (full compound)
+  *   sun mesh (only if the sun is present):  Ts·(ωS − ωC) + Tp·(ωP − ωC) = 0
+  *   ring mesh:                               Tr·(ωR − ωC) − Tp·(ωP − ωC) = 0
   *
-  * A full compound is closed by **two coupling rows** — `firstCoupling` and
-  * `secondCoupling`. Every coupling except `PlanetStack` is a plain central-
-  * shaft weld `ω_a − ω_b = 0` for the body pair from `Coupling.bodyPair`.
-  * `PlanetStack` emits the planet-coupling row derived from equating the two
-  * stages' planet-pinion velocities ωP1 = ωP2:
+  * then two coupling rows (`PlanetStack` is `ωP1 − ωP2 = 0`, any other coupling
+  * a weld `ω_a − ω_b = 0`), then the pins (Input = `omegaIn`, Fixed = 0).
   *
-  *   Tp2·(Tp1+Ts1)·ωC1 − Ts1·Tp2·ωS1 − Tp1·(Tp2+Ts2)·ωC2 + Ts2·Tp1·ωS2 = 0
-  *
-  * (With `CarrierToCarrier` also in effect, ωC1 = ωC2 and this reduces to the
-  * classic 5-body planet-coupling row — the legacy compound is bit-identical.)
-  *
-  * For NSS (S2 absent) the planet-coupling identity eliminates ωP directly
-  * from stage 2's surviving planet↔ring mesh, yielding one combined equation:
-  *
-  *   Tp2·Ts1·ωS1 − (Tp1·Tr2 + Tp2·Ts1)·ωC1 + Tp1·Tr2·ωR2 = 0
-  *
-  * NSS is hardcoded as shared-carrier + stacked-planet + no-S2; its
-  * `firstCoupling` / `secondCoupling` fields are not consulted.
-  *
-  * **Degree-of-freedom accounting.** Planetary mechanisms are 2-DOF:
-  *
-  *   Single stage:  3 bodies − 1 Willis                       = 2 DOF
-  *   NSS:           4 bodies − 1 Willis − 1 combined           = 2 DOF
-  *   Full compound: 6 bodies − 2 Willis − 2 coupling rows      = 2 DOF
-  *
-  * Pinning the **Input** body's velocity removes one DOF; pinning the
-  * **Fixed** body's velocity to zero removes the other.
+  * **Degree-of-freedom accounting.** With `a` absent suns the compound has
+  * `6 − a + 2` unknowns and `(4 − a) + 2 + 2` rows; a single stage has
+  * `3 + 1` unknowns and `2 + 2` rows. The counts match for every legal
+  * topology, so the system is square. A degenerate tuple gives a singular
+  * system and `None`; the solver is total and never throws.
   */
 object RoleSolver:
 
-  /** Angular velocities of every body present in the topology. Bodies that
-    * are Absent return 0.0 (they have no physical rotation). The returned
-    * map always covers `Body.values` in entirety, with 0.0 for Absent bodies.
-    */
-  final case class Velocities(values: Map[Body, Double]):
+  /** Angular velocities of every body and of both planets. Bodies that are
+    * Absent (or don't exist) return 0.0. For a single stage `omegaP2 == omegaP1`. */
+  final case class Velocities(values: Map[Body, Double], omegaP1: Double, omegaP2: Double):
     def get(b: Body): Double = values.getOrElse(b, 0.0)
     def omegaS1: Double = get(Body.S1)
     def omegaC1: Double = get(Body.C1)
@@ -59,144 +36,117 @@ object RoleSolver:
     def omegaS2: Double = get(Body.S2)
     def omegaC2: Double = get(Body.C2)
     def omegaR2: Double = get(Body.R2)
-    /** Stage-2 carrier velocity, falling back to C1 when C2 isn't a distinct
-      * body (NSS / single-stage model it as the shared C1). */
+    /** Stage-2 carrier velocity, falling back to C1 for a single stage. */
     def omegaC2OrC1: Double = if values.contains(Body.C2) then get(Body.C2) else get(Body.C1)
 
-  /** Solve for every body's angular velocity given `omegaIn` at the Input
-    * body and 0 at the Fixed body. Returns `None` when the linear system is
-    * singular (rare; happens when the chosen topology is kinematically
-    * under-determined at these tooth counts).
-    */
+  /** Solve for every velocity given `omegaIn` at the Input body and 0 at the
+    * Fixed body. `None` when the system is singular or a compound is given no
+    * stage-2 gear set. */
   def velocities(
       topology: Topology,
       stage1: GearSet,
       stage2: Option[GearSet],
       omegaIn: Double
-  ): Option[Velocities] = solveSystem(topology, stage1, stage2, omegaIn).map(_._1)
-
-  private def solveSystem(
-      topology: Topology,
-      stage1: GearSet,
-      stage2: Option[GearSet],
-      omegaIn: Double
-  ): Option[(Velocities, Double)] =
-    val s2Present = topology.s2Present
-    val present = topology.stages match
-      case 1 => Vector(Body.S1, Body.C1, Body.R1)
-      case 2 => if s2Present then Vector(Body.S1, Body.C1, Body.R1, Body.S2, Body.C2, Body.R2)
-                else                Vector(Body.S1, Body.C1, Body.R1, Body.R2)
-      case n => throw new IllegalArgumentException(s"unsupported stages=$n")
-    val n = present.length
-    val idx: Map[Body, Int] = present.zipWithIndex.toMap
-
-    val a = Array.ofDim[Double](n, n)
-    val b = new Array[Double](n)
-    var row = 0
-
-    val ts1 = stage1.sun.toDouble
-    val tp1 = stage1.planet.toDouble
-    val tr1 = stage1.ring.toDouble
-
-    // Row: Willis stage 1.
-    a(row)(idx(Body.S1)) =  ts1
-    a(row)(idx(Body.R1)) =  tr1
-    a(row)(idx(Body.C1)) = -(ts1 + tr1)
-    row += 1
-
-    // Emit one closure row for the given coupling. Every coupling except
-    // PlanetStack is a plain `ω_a − ω_b = 0`; PlanetStack is the planet-
-    // coupling row from equating ωP1 = ωP2 across both stages.
-    def emitCouplingRow(c: Coupling, ts2: Double, tp2: Double): Unit =
-      c match
-        case Coupling.PlanetStack =>
-          a(row)(idx(Body.C1)) =  tp2 * (tp1 + ts1)
-          a(row)(idx(Body.S1)) = -ts1 * tp2
-          a(row)(idx(Body.C2)) = -tp1 * (tp2 + ts2)
-          a(row)(idx(Body.S2)) =  ts2 * tp1
-        case other =>
-          val (ba, bb) = Coupling.bodyPair(other).getOrElse(
-            throw new IllegalStateException(s"coupling $other has no body pair")
-          )
-          a(row)(idx(ba)) =  1.0
-          a(row)(idx(bb)) = -1.0
-      row += 1
-
-    // Compound rows.
-    if topology.stages == 2 then
-      // A 2-stage topology with no stage-2 gear set can't be solved — return
-      // `None` rather than throwing. This happens transiently in the UI when
-      // the topology signal flips to compound before a fresh (compound) design
-      // arrives. The solver is *total*: any input it can't solve yields `None`.
-      val s2 = stage2 match
-        case Some(g) => g
-        case None    => return None
-      val tp2 = s2.planet.toDouble
-      val tr2 = s2.ring.toDouble
-      if s2Present then
-        val ts2 = s2.sun.toDouble
-        // Row: Willis stage 2 (own carrier C2).
-        a(row)(idx(Body.S2)) =  ts2
-        a(row)(idx(Body.R2)) =  tr2
-        a(row)(idx(Body.C2)) = -(ts2 + tr2)
-        row += 1
-        // Two coupling closure rows.
-        emitCouplingRow(topology.firstCoupling, ts2, tp2)
-        emitCouplingRow(topology.secondCoupling, ts2, tp2)
-      else
-        // NSS: single combined stage-2 constraint (sun absent, ωP eliminated
-        // via stage-1 mesh identity). Carrier is shared — modelled as C1.
-        a(row)(idx(Body.S1)) =  tp2 * ts1
-        a(row)(idx(Body.R2)) =  tp1 * tr2
-        a(row)(idx(Body.C1)) = -(tp1 * tr2 + tp2 * ts1)
-        row += 1
-
-    // Pin rows: Input = omegaIn, Fixed = 0.
-    a(row)(idx(topology.input)) = 1.0
-    b(row) = omegaIn
-    row += 1
-    a(row)(idx(topology.fixed)) = 1.0
-    b(row) = 0.0
-    row += 1
-
-    // Internal consistency: the number of equations built must match the
-    // number of unknowns. If it doesn't, the topology is structurally
-    // inconsistent — return `None` rather than throwing, keeping the solver
-    // total. (Should be unreachable for any `Topology` that passed its own
-    // construction invariants.)
-    if row != n then return None
-
-    LinAlg.solveDetailed(a, b).map { case (x, minPivot) =>
-      val velocityMap = idx.map { case (body, i) => body -> x(i) }
-      (Velocities(velocityMap), minPivot)
-    }
-
-  /** Forward ratio `ω_in / ω_out`. Returns `None` for kinematically singular
-    * topologies (the linear solver returned None) or for a vanishing output
-    * velocity (infinite reduction). */
-  def ratio(topology: Topology, stage1: GearSet, stage2: Option[GearSet]): Option[Ratio] =
-    velocities(topology, stage1, stage2, omegaIn = 1.0).flatMap { v =>
-      val out = v.get(topology.output)
-      if math.abs(out) < 1e-15 then None else Some(Ratio(1.0 / out))
-    }
-
-  /** Ratio + a flag indicating whether the linear system was well-conditioned.
-    * `wellConditioned == false` means the smallest pivot during Gauss
-    * elimination dropped below 1e-6 — the ratio is still well-defined
-    * mathematically but its numeric value may be noisier than usual. Callers
-    * can surface this as a `Validity.Warning` rather than silently presenting
-    * a wobbly number. */
-  def ratioWithConditioning(
-      topology: Topology, stage1: GearSet, stage2: Option[GearSet]
-  ): Option[(Ratio, Boolean)] =
-    velocitiesDetailed(topology, stage1, stage2, omegaIn = 1.0).flatMap { case (v, minPivot) =>
-      val out = v.get(topology.output)
-      if math.abs(out) < 1e-15 then None
-      else Some((Ratio(1.0 / out), minPivot >= 1e-6))
-    }
+  ): Option[Velocities] = velocitiesDetailed(topology, stage1, stage2, omegaIn).map(_._1)
 
   /** Like `velocities` but also returns the smallest pivot magnitude. */
   def velocitiesDetailed(
       topology: Topology, stage1: GearSet, stage2: Option[GearSet], omegaIn: Double
   ): Option[(Velocities, Double)] =
-    solveSystem(topology, stage1, stage2, omegaIn)
+    val x = solveRaw(topology, stage1, stage2, omegaIn)
+    if x == null then None
+    else
+      val n = topology.unknowns
+      val vals = topology.presentBodies.iterator.map(b => b -> x(topology.bodySlot(b.ordinal))).toMap
+      val p1 = x(topology.p1Slot)
+      val p2 = if topology.p2Slot >= 0 then x(topology.p2Slot) else p1
+      Some((Velocities(vals, p1, p2), x(n)))
+
+  /** Forward ratio `ω_in / ω_out`. `None` for a singular system or a vanishing
+    * output velocity (infinite reduction). */
+  def ratio(topology: Topology, stage1: GearSet, stage2: Option[GearSet]): Option[Ratio] =
+    val x = solveRaw(topology, stage1, stage2, 1.0)
+    if x == null then None
+    else
+      val out = x(topology.bodySlot(topology.output.ordinal))
+      if math.abs(out) >= 1e-15 then Some(Ratio.unsafe(1.0 / out)) else None
+
+  /** Ratio + a flag saying whether the elimination was well-conditioned
+    * (smallest pivot >= 1e-6; otherwise the value may be numerically noisy). */
+  def ratioWithConditioning(
+      topology: Topology, stage1: GearSet, stage2: Option[GearSet]
+  ): Option[(Ratio, Boolean)] =
+    val x = solveRaw(topology, stage1, stage2, 1.0)
+    if x == null then None
+    else
+      val out = x(topology.bodySlot(topology.output.ordinal))
+      if math.abs(out) >= 1e-15 then Some((Ratio.unsafe(1.0 / out), x(topology.unknowns) >= 1e-6))
+      else None
+
+  /** Assemble and solve. Returns the solution vector (length `unknowns + 1`,
+    * the last element being the smallest pivot) or `null` when unsolvable. Two
+    * array allocations per call; no maps. */
+  private def solveRaw(
+      t: Topology, g1: GearSet, g2: Option[GearSet], omegaIn: Double
+  ): Array[Double] =
+    val compound = t.stages == 2
+    if compound && g2.isEmpty then return null
+    val n   = t.unknowns
+    val m   = new Array[Double](n * n)
+    val r   = new Array[Double](n + 1)
+    val sl  = t.bodySlot
+
+    var row = meshRows(m, n, 0, sl(Body.S1.ordinal), sl(Body.R1.ordinal), sl(Body.C1.ordinal), t.p1Slot,
+      g1.sun.toDouble, g1.planet.toDouble, g1.ring.toDouble)
+
+    if compound then
+      val s2 = g2.get
+      row = meshRows(m, n, row, sl(Body.S2.ordinal), sl(Body.R2.ordinal), sl(Body.C2.ordinal), t.p2Slot,
+        s2.sun.toDouble, s2.planet.toDouble, s2.ring.toDouble)
+      row = couplingRow(m, n, row, t.firstCoupling, t)
+      row = couplingRow(m, n, row, t.secondCoupling, t)
+
+    m(row * n + sl(t.input.ordinal)) = 1.0
+    r(row) = omegaIn
+    row += 1
+    m(row * n + sl(t.fixed.ordinal)) = 1.0
+    row += 1
+
+    // Unreachable for a Topology that passed its invariants; stay total anyway.
+    if row != n then return null
+    val minPivot = LinAlg.solveFlat(m, r, n)
+    if minPivot < 0.0 then null
+    else
+      r(n) = minPivot
+      r
+
+  /** Mesh rows of one stage starting at `row0`; returns the next free row.
+    * `sunSlot < 0` means the sun is absent (no sun mesh). */
+  private def meshRows(
+      m: Array[Double], n: Int, row0: Int,
+      sunSlot: Int, ringSlot: Int, carrierSlot: Int, planetSlot: Int,
+      ts: Double, tp: Double, tr: Double
+  ): Int =
+    var row = row0
+    if sunSlot >= 0 then
+      m(row * n + sunSlot)     = ts
+      m(row * n + planetSlot)  = tp
+      m(row * n + carrierSlot) = -(ts + tp)
+      row += 1
+    m(row * n + ringSlot)    = tr
+    m(row * n + planetSlot)  = -tp
+    m(row * n + carrierSlot) = tp - tr
+    row + 1
+
+  /** One coupling row: `PlanetStack` is `ωP1 − ωP2 = 0`, any other coupling a
+    * plain weld of its body pair. */
+  private def couplingRow(m: Array[Double], n: Int, row: Int, c: Coupling, t: Topology): Int =
+    c match
+      case Coupling.PlanetStack =>
+        m(row * n + t.p1Slot) = 1.0
+        m(row * n + t.p2Slot) = -1.0
+      case other =>
+        val (a, b) = Coupling.bodyPair(other).get
+        m(row * n + t.bodySlot(a.ordinal)) = 1.0
+        m(row * n + t.bodySlot(b.ordinal)) = -1.0
+    row + 1

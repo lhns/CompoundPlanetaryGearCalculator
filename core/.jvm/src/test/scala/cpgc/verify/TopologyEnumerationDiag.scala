@@ -92,7 +92,7 @@ class TopologyEnumerationDiag extends FunSuite:
   private def bodiesFor(stages: Int, s2Present: Boolean): Vector[Body] = stages match
     case 1 => Vector(Body.S1, Body.C1, Body.R1)
     case 2 => if s2Present then Vector(Body.S1, Body.C1, Body.R1, Body.S2, Body.C2, Body.R2)
-              else                Vector(Body.S1, Body.C1, Body.R1, Body.R2)
+              else                Vector(Body.S1, Body.C1, Body.R1, Body.C2, Body.R2)
 
   /** Build a Topology from (stages, s2Present, role tuple, couplings) or return
     * None if the constructor would reject it. */
@@ -136,7 +136,7 @@ class TopologyEnumerationDiag extends FunSuite:
   private def presentBodies(k: TopologyKey): Set[Body] =
     if k.stages == 1 then Set(Body.S1, Body.C1, Body.R1)
     else if k.s2Present then Set(Body.S1, Body.C1, Body.R1, Body.S2, Body.C2, Body.R2)
-    else Set(Body.S1, Body.C1, Body.R1, Body.R2)
+    else Set(Body.S1, Body.C1, Body.R1, Body.C2, Body.R2)
 
   /** Union-find equivalence classes of bodies under the weld graph. */
   private def equivalenceClasses(k: TopologyKey): List[Set[Body]] =
@@ -159,7 +159,8 @@ class TopologyEnumerationDiag extends FunSuite:
 
   /** Classify a single (k, topology) — see classification ADT above. */
   private def classify(k: TopologyKey, t: Topology): Classification =
-    // PlanetStack physical-impossibility check (kinematic chimera).
+    // PlanetStack without a shared carrier is rejected by `Topology` since ADR 0015 §4,
+    // so this never fires; kept so the report keeps its (now empty) chimera section.
     val hasPS = k.firstCoupling == Coupling.PlanetStack || k.secondCoupling == Coupling.PlanetStack
     val hasCC = k.firstCoupling == Coupling.CarrierToCarrier || k.secondCoupling == Coupling.CarrierToCarrier
     if hasPS && !hasCC && k.stages == 2 then return PhysImpossible
@@ -209,15 +210,15 @@ class TopologyEnumerationDiag extends FunSuite:
         rows += Row(k, classify(k, t))
       }
 
-    // NSS (compound, S2 absent): couplings don't influence the NSS solver
-    // path (it emits its own combined row); enumerate role tuples only,
-    // with the canonical {CC, PS} pair.
+    // NSS (compound, S2 absent): ordinary couplings apply (ADR 0015 §3); the
+    // constructor rejects pairs that weld the absent S2 or break the stacking rule.
     val nss = bodiesFor(2, false)
     for in <- nss; out <- nss if out != in; fx <- nss if fx != in && fx != out do
-      val k = TopologyKey(2, false, in, out, fx, Coupling.CarrierToCarrier, Coupling.PlanetStack)
-      buildTopology(2, false, in, out, fx, Coupling.CarrierToCarrier, Coupling.PlanetStack).foreach { t =>
-        rows += Row(k, classify(k, t))
-      }
+      for (c1, c2) <- allPairs do
+        val k = TopologyKey(2, false, in, out, fx, c1, c2)
+        buildTopology(2, false, in, out, fx, c1, c2).foreach { t =>
+          rows += Row(k, classify(k, t))
+        }
 
     // Full compound: 120 role tuples × 45 distinct coupling pairs = 5 400.
     val fc = bodiesFor(2, true)
@@ -351,7 +352,7 @@ class TopologyEnumerationDiag extends FunSuite:
     sb ++= "**This document lists *structural models* — what is driving what, what is fixed, what is welded together.** Numerical gear ratios are *not* the grouping key here; the question being answered is \"what are the distinct mechanical arrangements the 6-body + 10-coupling model can express?\"\n\n"
 
     sb ++= "## Methodology\n\n"
-    sb ++= "- Body set: `{S1, C1, R1, S2, C2, R2}` for full compounds, `{S1, C1, R1, R2}` for NSS, `{S1, C1, R1}` for single-stage.\n"
+    sb ++= "- Body set: `{S1, C1, R1, S2, C2, R2}` for full compounds, `{S1, C1, R1, C2, R2}` for NSS, `{S1, C1, R1}` for single-stage.\n"
     sb ++= "- Role tuple = `(Input, Output, Fixed)`, three distinct bodies. Remaining bodies are Free (or Absent for S2 in NSS).\n"
     sb ++= "- Coupling pair = two distinct entries from the 10-coupling enum (45 unordered pairs).\n"
     sb ++= "- For each constructible topology, compute equivalence classes of bodies under the weld graph (couplings are welds; `PlanetStack` is noted separately because it equates planet pinions, not central shafts).\n"
