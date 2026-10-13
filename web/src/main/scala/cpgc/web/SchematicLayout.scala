@@ -5,7 +5,8 @@ import cpgc.domain.Stage
 import cpgc.render.GearGeometry
 import cpgc.render.GearGeometry.{gearRadii as coreGearRadii}
 
-// Pure schematic geometry (positions, radii, angles, badge anchors, tooth outlines); no DOM, no Laminar.
+// Pure schematic geometry (stage scale and spacing, radii, badge anchors, couplings) plus the one tooth-outline
+// builder shared with the 3D view; no DOM, no Laminar.
 object SchematicLayout:
 
   /** Outer radius of every stage's ring in viewBox units; each stage is scaled to it. */
@@ -15,29 +16,20 @@ object SchematicLayout:
   def stageCenters(twoStage: Boolean): (Double, Double) =
     if twoStage then (-110.0, 110.0) else (0.0, 0.0)
 
-  /** Drawn geometry of one stage, centred at (`cx`, 0). */
+  /** Drawn geometry of one stage, centred at (`cx`, 0). `scale` (drawing units per mm) is the one
+    * mm to drawing conversion; every other length here is already in drawing units. */
   final case class StageLayout(
       cx: Double,
       scale: Double,
       mPx: Double,
-      sunPitchR: Double,
-      planetPitchR: Double,
-      ringPitchR: Double,
       ringOR: Double,
       sunOR: Double,
       carrierR: Double,
-      planets: Vector[(Double, Double)],
       ringBadge: (Double, Double),
       sunBadge: (Double, Double),
       carrierBadge: (Double, Double),
       labelY: Double
   )
-
-  /** Position of planet `i` of `n` on a carrier of radius `carrierR` about (`cx`, 0):
-    * planet 0 at the top, then k·360/N clockwise on screen. */
-  def planetPosition(i: Int, n: Int, cx: Double, carrierR: Double): (Double, Double) =
-    val theta = 2.0 * math.Pi * i / n - math.Pi / 2.0
-    (cx + carrierR * math.cos(theta), carrierR * math.sin(theta))
 
   def stageLayout(stage: Stage, cx: Double): StageLayout =
     val rawOuterR    = stage.ringOuterDiameter / 2.0
@@ -45,27 +37,18 @@ object SchematicLayout:
     val px           = (x: Double) => x * scale
     val mPx          = px(stage.module.value)
     val sunPitchR    = mPx * stage.set.sun.toDouble / 2.0
-    val planetPitchR = mPx * stage.set.planet.toDouble / 2.0
-    val ringPitchR   = mPx * stage.set.ring.toDouble / 2.0
     // Ring's outer rim flush with the polygon's back-of-tooth (dedendum).
     val ringOR    = coreGearRadii(stage.set.ring.toInt, mPx, internal = true).root
     val carrierR  = px(stage.centerToCenter)
-    val n         = stage.set.numPlanets
     StageLayout(
       cx = cx, scale = scale, mPx = mPx,
-      sunPitchR = sunPitchR, planetPitchR = planetPitchR, ringPitchR = ringPitchR,
       ringOR = ringOR, sunOR = coreGearRadii(stage.set.sun.toInt, mPx, internal = false).outer,
       carrierR = carrierR,
-      planets = Vector.tabulate(n)(planetPosition(_, n, cx, carrierR)),
       ringBadge = (cx, -ringOR - 4),
       sunBadge = (cx, -sunPitchR - mPx * 1.6),
       carrierBadge = (cx, carrierR + 9),
       labelY = ringOR + 16
     )
-
-  /** Phasing turns → drawn angle: planet i sits at 2πi/N − π/2, so the phasing frame
-    * (planet k at k/N turns) is rotated by a quarter turn; mesh conditions are invariant under that shift. */
-  def toRad(turns: Double): Double = 2.0 * math.Pi * (turns - 0.25)
 
   def rotateXform(angleRad: Double, ox: Double, oy: Double): String =
     val deg = angleRad * 180.0 / math.Pi
@@ -124,11 +107,6 @@ object SchematicLayout:
       Connector(from, ((from._1 + to._1) / 2.0, (from._2 + to._2) / 2.0 + bow), to)
     }
 
-  /** Centre of planet `i` of `n` after the carrier has turned by `carrierRad`. */
-  def planetPositionAt(i: Int, n: Int, cx: Double, carrierR: Double, carrierRad: Double): (Double, Double) =
-    val theta = 2.0 * math.Pi * i / n - math.Pi / 2.0 + carrierRad
-    (cx + carrierR * math.cos(theta), carrierR * math.sin(theta))
-
   // ── Involute tooth geometry ────────────────────────────────────────────────
   //
   // Two involute gears at the correct centre distance mesh tangentially along
@@ -144,161 +122,110 @@ object SchematicLayout:
 
   private inline def inv(t: Double): Double = GearGeometry.inv(t)
 
-  /** SVG path data of an external involute gear (sun, planet). Traces tip → right flank
-    * (involute) → trough at root → next tooth, around the full circumference.
-    */
-  def externalGearPath(
-      cx: Double, cy: Double,
-      teeth: Int, modulePx: Double,
-      rotateRad: Double
-  ): String =
-    val r        = coreGearRadii(teeth, modulePx, internal = false)
-    val twoPi    = 2.0 * math.Pi
-    val toothPitch = twoPi / teeth
-    val deltaBase  = math.Pi / (2.0 * teeth) + inv(PressureAngleRad)
+  // The one implementation of the tooth outlines: closed, simple polygons (first point not repeated),
+  // counter-clockwise per tooth, about the origin in y-down convention. The scene stores them (in mm); the
+  // SVG paths are just their text and the 3D view extrudes them.
 
-    def alphaAt(rr: Double): Double =
-      if rr <= r.base then 0.0 else math.acos(r.base / rr)
-
+  /** SVG path data of a closed polygon. */
+  def polygonPath(pts: Vector[(Double, Double)]): String =
     val sb = StringBuilder()
-    var first = true
-    inline def add(x: Double, y: Double): Unit =
-      if first then { sb ++= s"M ${"%.3f".format(x)} ${"%.3f".format(y)} "; first = false }
-      else            sb ++= s"L ${"%.3f".format(x)} ${"%.3f".format(y)} "
-    inline def addPolar(rr: Double, theta: Double): Unit =
-      add(cx + rr * math.cos(theta), cy + rr * math.sin(theta))
+    pts.iterator.zipWithIndex.foreach { case ((x, y), i) =>
+      sb ++= (if i == 0 then "M " else "L ") ++= "%.3f %.3f ".format(x, y)
+    }
+    sb ++= "Z"
+    sb.toString
+
+  /** A scene point (mm, about the stage axis) in the drawing: scaled by `k`, about the axis at x = `cx`. */
+  def place(p: (Double, Double), k: Double, cx: Double): (Double, Double) = (cx + k * p._1, k * p._2)
+
+  /** Centre of a scene gear in the drawing. */
+  def gearCentre(g: GearboxScene.Gear, k: Double, cx: Double): (Double, Double) = place(g.centre, k, cx)
+
+  /** SVG path of a scene gear's outline in the drawing. */
+  def gearPath(g: GearboxScene.Gear, k: Double, cx: Double): String =
+    val (ox, oy) = gearCentre(g, k, cx)
+    polygonPath(g.outline.map((x, y) => (ox + k * x, oy + k * y)))
+
+  /** Outline of an external involute gear (sun, planet) about the origin, in the unit of `module`. */
+  def externalGearPoints(teeth: Int, module: Double, rotateRad: Double): Vector[(Double, Double)] =
+    val r          = coreGearRadii(teeth, module, internal = false)
+    val toothPitch = 2.0 * math.Pi / teeth
+    val deltaBase  = math.Pi / (2.0 * teeth) + inv(PressureAngleRad)
+    def alphaAt(rr: Double): Double = if rr <= r.base then 0.0 else math.acos(r.base / rr)
+
+    val out = Vector.newBuilder[(Double, Double)]
+    def addPolar(rr: Double, theta: Double): Unit = out += ((rr * math.cos(theta), rr * math.sin(theta)))
 
     val rFlankStart = math.max(r.base, r.root)
     val flankSpan   = r.outer - rFlankStart
-
     var k = 0
     while k < teeth do
       val thetaC = k * toothPitch + rotateRad
-
-      // Right flank: rFlankStart → rOuter
+      // Per tooth: left flank up, tip, right flank down, then the trough to the next tooth.
+      if r.root < r.base then addPolar(r.root, thetaC - deltaBase)
       var s = 0
       while s < FlankSamples do
-        val frac = s.toDouble / (FlankSamples - 1)
-        val rr   = rFlankStart + frac * flankSpan
-        addPolar(rr, thetaC + deltaBase - inv(alphaAt(rr)))
+        val rr = rFlankStart + (s.toDouble / (FlankSamples - 1)) * flankSpan
+        addPolar(rr, thetaC - deltaBase + inv(alphaAt(rr)))
         s += 1
-
-      // Tip arc
-      val alphaA       = alphaAt(r.outer)
+      val alphaA        = alphaAt(r.outer)
       val thetaRightTop = thetaC + deltaBase - inv(alphaA)
       val thetaLeftTop  = thetaC - deltaBase + inv(alphaA)
       s = 1
       while s <= TipSamples do
-        val frac = s.toDouble / (TipSamples + 1)
-        addPolar(r.outer, thetaRightTop + frac * (thetaLeftTop - thetaRightTop))
+        addPolar(r.outer, thetaLeftTop + (s.toDouble / (TipSamples + 1)) * (thetaRightTop - thetaLeftTop))
         s += 1
-
-      // Left flank: rOuter → rFlankStart
       s = 0
       while s < FlankSamples do
-        val frac = 1.0 - s.toDouble / (FlankSamples - 1)
-        val rr   = rFlankStart + frac * flankSpan
-        addPolar(rr, thetaC - deltaBase + inv(alphaAt(rr)))
+        val rr = rFlankStart + (1.0 - s.toDouble / (FlankSamples - 1)) * flankSpan
+        addPolar(rr, thetaC + deltaBase - inv(alphaAt(rr)))
         s += 1
-
-      // Drop to root if r_root < r_base
-      val thetaLeftBase = thetaC - deltaBase
-      if r.root < r.base then addPolar(r.root, thetaLeftBase)
-
-      // Trough samples
-      val thetaNextRightBase = thetaC + toothPitch + deltaBase
+      val thetaRightBase = thetaC + deltaBase
+      if r.root < r.base then addPolar(r.root, thetaRightBase)
+      val thetaNextLeftBase = thetaC + toothPitch - deltaBase
       s = 1
       while s < TroughSamples do
-        val frac = s.toDouble / TroughSamples
-        addPolar(r.root, thetaLeftBase + frac * (thetaNextRightBase - thetaLeftBase))
+        addPolar(r.root, thetaRightBase + (s.toDouble / TroughSamples) * (thetaNextLeftBase - thetaRightBase))
         s += 1
-
-      // Trough end / climb back up to next tooth's right-flank base
-      if r.root < r.base then addPolar(r.root, thetaNextRightBase)
-
       k += 1
+    out.result()
 
-    sb ++= "Z"
-    sb.toString
-
-  /** SVG path data of an internal involute ring gear. Teeth point inward. Traces the inner
-    * tooth contour: tip → right flank (involute, outward) → root → next tooth.
-    *
-    * For an internal gear, the flank position at radius r (relative to the
-    * tooth's centreline θ_c) is:
-    *   θ_right(r) = θ_c + π/(2T) + (inv(α(r)) − inv(α_p))
-    * At r = r_pitch this is θ_c + π/(2T) (half-pitch). The correction is
-    * positive above pitch (wider at root) and negative below pitch (narrower
-    * at tip). Below r_base, no involute — straight radial down to the tip
-    * apex on the centreline.
-    */
-  def internalGearPath(
-      cx: Double, cy: Double,
-      teeth: Int, modulePx: Double,
-      rotateRad: Double
-  ): String =
-    val r          = coreGearRadii(teeth, modulePx, internal = true)
-    val twoPi      = 2.0 * math.Pi
-    val toothPitch = twoPi / teeth
-    val deltaPitch = math.Pi / (2.0 * teeth)        // half tooth thickness at pitch
+  /** Outline of an internal involute ring gear's tooth side (teeth point inward) about the origin. */
+  def internalGearPoints(teeth: Int, module: Double, rotateRad: Double): Vector[(Double, Double)] =
+    val r          = coreGearRadii(teeth, module, internal = true)
+    val toothPitch = 2.0 * math.Pi / teeth
+    val deltaPitch = math.Pi / (2.0 * teeth)
     val invP       = inv(PressureAngleRad)
     val rTip       = r.outer
     val rRoot      = r.root
-    val rFlankLo   = math.max(r.base, rTip)         // lowest valid involute radius
+    val rFlankLo   = math.max(r.base, rTip)
+    def alphaAt(rr: Double): Double = if rr <= r.base then 0.0 else math.acos(r.base / rr)
+    def thetaRight(thetaC: Double, rr: Double): Double = thetaC + deltaPitch + (inv(alphaAt(rr)) - invP)
+    def thetaLeft(thetaC: Double, rr: Double): Double  = thetaC - deltaPitch - (inv(alphaAt(rr)) - invP)
 
-    def alphaAt(rr: Double): Double =
-      if rr <= r.base then 0.0 else math.acos(r.base / rr)
-
-    /** Right-flank world angle (internal involute) at radius rr for a tooth
-      * centred at thetaC. */
-    inline def thetaRight(thetaC: Double, rr: Double): Double =
-      thetaC + deltaPitch + (inv(alphaAt(rr)) - invP)
-
-    inline def thetaLeft(thetaC: Double, rr: Double): Double =
-      thetaC - deltaPitch - (inv(alphaAt(rr)) - invP)
-
-    val sb = StringBuilder()
-    var first = true
-    inline def add(x: Double, y: Double): Unit =
-      if first then { sb ++= s"M ${"%.3f".format(x)} ${"%.3f".format(y)} "; first = false }
-      else            sb ++= s"L ${"%.3f".format(x)} ${"%.3f".format(y)} "
-    inline def addPolar(rr: Double, theta: Double): Unit =
-      add(cx + rr * math.cos(theta), cy + rr * math.sin(theta))
+    val out = Vector.newBuilder[(Double, Double)]
+    def addPolar(rr: Double, theta: Double): Unit = out += ((rr * math.cos(theta), rr * math.sin(theta)))
 
     var k = 0
     while k < teeth do
       val thetaC = k * toothPitch + rotateRad
-
-      // Tip apex on centreline (innermost)
       addPolar(rTip, thetaC)
-
-      // Right flank: rFlankLo → rRoot (outward). FlankSamples+1 points.
       var s = 0
       while s <= FlankSamples do
-        val frac = s.toDouble / FlankSamples
-        val rr   = rFlankLo + frac * (rRoot - rFlankLo)
+        val rr = rFlankLo + (s.toDouble / FlankSamples) * (rRoot - rFlankLo)
         addPolar(rr, thetaRight(thetaC, rr))
         s += 1
-
-      // Trough along rRoot to next tooth (TroughSamples − 1 intermediate points)
       val thetaRightRoot    = thetaRight(thetaC, rRoot)
       val thetaNextLeftRoot = thetaLeft(thetaC + toothPitch, rRoot)
       s = 1
       while s < TroughSamples do
-        val frac = s.toDouble / TroughSamples
-        addPolar(rRoot, thetaRightRoot + frac * (thetaNextLeftRoot - thetaRightRoot))
+        addPolar(rRoot, thetaRightRoot + (s.toDouble / TroughSamples) * (thetaNextLeftRoot - thetaRightRoot))
         s += 1
-
-      // Left flank of next tooth: rRoot → rFlankLo. FlankSamples+1 points.
       val thetaNextC = thetaC + toothPitch
       s = 0
       while s <= FlankSamples do
-        val frac = 1.0 - s.toDouble / FlankSamples
-        val rr   = rFlankLo + frac * (rRoot - rFlankLo)
+        val rr = rFlankLo + (1.0 - s.toDouble / FlankSamples) * (rRoot - rFlankLo)
         addPolar(rr, thetaLeft(thetaNextC, rr))
         s += 1
-
       k += 1
-
-    sb ++= "Z"
-    sb.toString
+    out.result()
