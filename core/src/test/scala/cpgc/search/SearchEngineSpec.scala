@@ -20,18 +20,24 @@ class SearchEngineSpec extends FunSuite:
 
   test("TopK keeps the k best, evicts the worst, breaks ties by arrival and ignores duplicate keys") {
     val t = new TopK[String](3)
-    for (s, k) <- Seq(5.0 -> "a", 1.0 -> "b", 3.0 -> "c", 3.0 -> "d", 2.0 -> "e", 3.0 -> "f", 1.0 -> "b") do t.offer(s, k, k)
+    for (s, k) <- Seq(5.0 -> "a", 1.0 -> "b", 3.0 -> "c", 3.0 -> "d", 2.0 -> "e", 3.0 -> "f", 1.0 -> "b") do t.offer(s, k.charAt(0).toLong, k)
     assertEquals(t.result, Vector("b", "e", "c")) // d, f lose the tie to c; the second "b" is a duplicate key
     assert(t.accepts(1.5) && !t.accepts(3.0) && !t.accepts(Double.NaN))
-    assertEquals(new TopK[Int](0).accepts(0.0), false)
+    assertEquals(new TopK[String](0).accepts(0.0), false)
   }
 
-  test("TopK materialises a value only when it is kept") {
-    val t = new TopK[Int](1)
-    t.offer(1.0, "x", 1)
-    var built = false
-    t.offer(2.0, "y", { built = true; 2 })
-    assert(!built)
+  test("TopK key set survives eviction churn (many keys, collisions, removals)") {
+    val t = new TopK[String](50)
+    val rnd = new scala.util.Random(7)
+    val offers = Vector.fill(5000)((rnd.nextInt(400).toDouble, rnd.nextInt(300).toLong))
+    for (s, k) <- offers do t.offer(s, k, s"$k")
+    // naive replay of the same rules
+    val held = scala.collection.mutable.LinkedHashMap.empty[Long, (Double, Int)]
+    for ((s, k), i) <- offers.zipWithIndex do
+      if !held.contains(k) && (held.size < 50 || s < held.values.map(_._1).max) then
+        if held.size >= 50 then held -= held.maxBy((_, v) => (v._1, v._2))._1
+        held(k) = (s, i)
+    assertEquals(t.result.map(_.toLong).toSet, held.keySet.toSet)
   }
 
   // -- ranking against an exhaustive sort ---------------------------------------------
@@ -167,3 +173,13 @@ class SearchEngineSpec extends FunSuite:
     val cfg = cfgFor(t, Nil)
     assertEquals(Calculator.search(cfg).size, Calculator.search(cfg.copy(phasedPinions = true)).size)
   }
+
+  // -- big-K engine == exhaustive stream, deduped and ranked ------------------------------
+
+  for t <- topologies; sort <- SortBy.values do
+    test(s"big-K top == Scorer.sort of the full stream, by $sort [${t.legacyMode.fold("sun-less CDCP")(_.toString)}]") {
+      val cfg = cfgFor(t)
+      val all = Calculator.search(cfg).toVector
+      val got = Calculator.top(cfg, sort, 1_000_000)
+      assertEquals(got, Scorer.sort(all, sort, cfg.targets))
+    }

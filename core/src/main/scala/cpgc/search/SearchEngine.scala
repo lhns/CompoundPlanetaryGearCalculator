@@ -1,45 +1,130 @@
 package cpgc.search
 
 import cpgc.constraints.SearchConfig
-import cpgc.domain.{CompoundDesign, Ratio}
+import cpgc.domain.{CompoundDesign, GearSet, Ratio}
 import cpgc.search.Scorer.{Scored, SortBy}
 
 import scala.collection.mutable
+
+/** Open-addressing set of longs with deletion (backward shift); no boxing. */
+private final class LongSet:
+  private var table = new Array[Long](64)
+  private var used  = new Array[Boolean](64)
+  private var count = 0
+
+  private def slot(key: Long, mask: Int): Int =
+    val h = key * 0x9E3779B97F4A7C15L
+    ((h ^ (h >>> 32)).toInt) & mask
+
+  def contains(key: Long): Boolean =
+    val mask = table.length - 1
+    var i = slot(key, mask)
+    while used(i) do
+      if table(i) == key then return true
+      i = (i + 1) & mask
+    false
+
+  def add(key: Long): Unit =
+    if (count + 1) * 2 > table.length then grow()
+    val mask = table.length - 1
+    var i = slot(key, mask)
+    while used(i) do
+      if table(i) == key then return
+      i = (i + 1) & mask
+    table(i) = key; used(i) = true; count += 1
+
+  def remove(key: Long): Unit =
+    val mask = table.length - 1
+    var i = slot(key, mask)
+    while used(i) && table(i) != key do i = (i + 1) & mask
+    if !used(i) then return
+    count -= 1
+    var j = i
+    var done = false
+    while !done do
+      j = (j + 1) & mask
+      if !used(j) then done = true
+      else
+        val h = slot(table(j), mask)
+        // move j into the hole i unless its home slot lies cyclically in (i, j]
+        val stays = if i <= j then i < h && h <= j else i < h || h <= j
+        if !stays then { table(i) = table(j); i = j }
+    used(i) = false
+
+  private def grow(): Unit =
+    val (ot, ou) = (table, used)
+    table = new Array[Long](ot.length * 2); used = new Array[Boolean](ot.length * 2); count = 0
+    var i = 0
+    while i < ot.length do { if ou(i) then add(ot(i)); i += 1 }
 
 /** Bounded top-K accumulator with deduplication (ADR 0017).
   *
   * Smaller score is better. Ties keep the earlier offer (a total order on
   * `(score, arrival)`), so the result does not depend on heap internals. A key
-  * already held is ignored. A design is only materialised (`value` is by-name)
-  * when it is actually kept. */
-final class TopK[A](k: Int):
-  private final class Entry(val score: Double, val seq: Long, val key: Any, val value: A)
-  // PriorityQueue is a max-heap: `head` is the worst kept entry.
-  private val worstFirst: Ordering[Entry] = (a, b) =>
+  * already held is ignored. Keys are primitive longs; entries are meant to be
+  * lightweight candidates, materialised by the reader. */
+final class TopK[A <: AnyRef](k: Int):
+  private final class Entry(val score: Double, val seq: Long, val key: Long, val value: A)
+  private def worse(a: Entry, b: Entry): Boolean =
     val c = java.lang.Double.compare(a.score, b.score)
-    if c != 0 then c else java.lang.Long.compare(a.seq, b.seq)
-  private val heap = mutable.PriorityQueue.empty[Entry](using worstFirst)
-  private val keys = mutable.HashSet.empty[Any]
+    if c != 0 then c > 0 else a.seq > b.seq
+  // Binary max-heap: heap(0) is the worst kept entry.
+  private var heap = new Array[Entry](math.max(1, math.min(k, 64)))
+  private var n = 0
+  private val keys = new LongSet
   private var arrivals = 0L
 
-  def size: Int = heap.size
+  def size: Int = n
 
   /** Would an offer with this score be kept (key aside)? Cheap pre-check. */
   def accepts(score: Double): Boolean =
-    k > 0 && !score.isNaN && (heap.size < k || score < heap.head.score)
+    k > 0 && !score.isNaN && (n < k || score < heap(0).score)
 
-  def offer(score: Double, key: Any, value: => A): Unit =
+  def offer(score: Double, key: Long, value: A): Unit =
     if accepts(score) && !keys.contains(key) then
       arrivals += 1
-      if heap.size >= k then keys -= heap.dequeue().key
-      heap.enqueue(new Entry(score, arrivals, key, value))
-      keys += key
+      val e = new Entry(score, arrivals, key, value)
+      if n >= k then
+        keys.remove(heap(0).key)
+        heap(0) = e
+        siftDown(0)
+      else
+        if n == heap.length then heap = java.util.Arrays.copyOf(heap, math.min(k, n * 2))
+        heap(n) = e; n += 1
+        siftUp(n - 1)
+      keys.add(key)
+
+  private def siftUp(from: Int): Unit =
+    var i = from
+    val e = heap(i)
+    while i > 0 && worse(e, heap((i - 1) >> 1)) do
+      heap(i) = heap((i - 1) >> 1); i = (i - 1) >> 1
+    heap(i) = e
+
+  private def siftDown(from: Int): Unit =
+    var i = from
+    val e = heap(i)
+    var go = true
+    while go do
+      var c = 2 * i + 1
+      if c >= n then go = false
+      else
+        if c + 1 < n && worse(heap(c + 1), heap(c)) then c += 1
+        if worse(heap(c), e) then { heap(i) = heap(c); i = c } else go = false
+    heap(i) = e
+
+  private def sortedEntries: Array[Entry] =
+    val a = java.util.Arrays.copyOf(heap, n)
+    java.util.Arrays.sort(a.asInstanceOf[Array[AnyRef]], (x, y) =>
+      val (p, q) = (x.asInstanceOf[Entry], y.asInstanceOf[Entry])
+      if worse(p, q) then 1 else if worse(q, p) then -1 else 0)
+    a
 
   /** Kept values, best first. */
-  def result: Vector[A] = heap.toVector.sorted(using worstFirst).map(_.value)
+  def result: Vector[A] = sortedEntries.iterator.map(_.value).toVector
 
   /** Kept scores, best first (same order as `result`). */
-  def scores: Vector[Double] = heap.toVector.sorted(using worstFirst).map(_.score)
+  def scores: Vector[Double] = sortedEntries.iterator.map(_.score).toVector
 
 /** The calculator's one search engine (ADR 0017): `PairSearch` candidates feed
   * bounded top-K accumulators.
@@ -59,13 +144,17 @@ final class SearchEngine(val cfg: SearchConfig, val sortBy: SortBy = SortBy.Best
   private val ev      = search.evaluator
   private val effic   = cpgc.physics.Efficiency.overall(cfg.topology)
   private val targets = cfg.targets.distinct.toVector
-  private val tops    = targets.map(t => t -> new TopK[Scored](k))
-  private val overall = new TopK[CompoundDesign](k)
+  private val tops    = targets.map(t => t -> new TopK[SearchEngine.Cand](k))
+  private val overall = new TopK[SearchEngine.Cand](k)
+  private val spill   = mutable.HashMap.empty[(Int, Int, Int, Int, Int, Int), Long]
+  private var topCache: Vector[CompoundDesign] = null
+  private var perTargetCache: Map[Ratio, Vector[Scored]] = null
   private var foundCount = 0L
   private var stopped = false
 
   /** Run up to `units` units of work; true once the whole space is consumed. */
   def step(units: Int): Boolean =
+    topCache = null; perTargetCache = null
     var i = 0
     while i < units && !search.done do
       if search.advance() then offer()
@@ -92,10 +181,17 @@ final class SearchEngine(val cfg: SearchConfig, val sortBy: SortBy = SortBy.Best
   def found: Long = foundCount
 
   /** Best designs overall by `sortBy`, best first. */
-  def top: Vector[CompoundDesign] = overall.result
+  def top: Vector[CompoundDesign] =
+    if topCache == null then topCache = overall.result.map(_.design)
+    topCache
 
   /** Best designs per target by absolute error, best first (empty without targets). */
-  def perTarget: Map[Ratio, Vector[Scored]] = tops.map((t, acc) => t -> acc.result).toMap
+  def perTarget: Map[Ratio, Vector[Scored]] =
+    if perTargetCache == null then
+      perTargetCache = tops.map { (t, acc) =>
+        t -> acc.result.map { c => val d = c.design; Scored(t, Scorer.absoluteError(t, d.ratio), d) }
+      }.toMap
+    perTargetCache
 
   private def offer(): Unit =
     foundCount += 1
@@ -123,7 +219,36 @@ final class SearchEngine(val cfg: SearchConfig, val sortBy: SortBy = SortBy.Best
       want = tops(ti)._2.accepts(math.abs(math.abs(tops(ti)._1.value) - a))
       ti += 1
     if want then
-      val design = Compounder.design(cfg, s1, Option(s2), ev)
-      val key    = Scorer.canonicalKey(design)
-      overall.offer(score, key, design)
-      for (t, acc) <- tops do acc.offer(Scorer.absoluteError(t, design.ratio), key, Scored(t, Scorer.absoluteError(t, design.ratio), design))
+      val c   = new SearchEngine.Cand(cfg, s1, s2, r, ev.wellConditioned, ev.module1, ev.module2)
+      val key = dedupKey(s1, s2)
+      overall.offer(score, key, c)
+      ti = 0
+      while ti < tops.length do
+        val (t, acc) = tops(ti)
+        acc.offer(math.abs(math.abs(t.value) - a), key, c)
+        ti += 1
+
+  /** Dedup key: both stages' sun/planet teeth (ring follows) and N1, N2. The
+    * topology is fixed for the engine. Packed into 60 bits (bit 63 clear);
+    * out-of-range values get a sequential id with bit 63 set. */
+  private def dedupKey(s1: GearSet, s2: GearSet): Long =
+    val su1 = s1.sun.toInt; val p1 = s1.planet.toInt; val n1 = s1.numPlanets
+    val su2 = if s2 == null then 0 else s2.sun.toInt
+    val p2  = if s2 == null then 0 else s2.planet.toInt
+    val n2  = if s2 == null then 0 else s2.numPlanets
+    if ((su1 | p1 | su2 | p2) >>> 11) == 0 && ((n1 | n2) >>> 8) == 0 then
+      (((((su1.toLong << 11 | p1) << 11 | su2) << 11 | p2) << 8 | n1) << 8) | n2
+    else
+      spill.getOrElseUpdate((su1, p1, su2, p2, n1, n2), Long.MinValue | spill.size.toLong)
+
+object SearchEngine:
+  /** A found design, kept light until a reader needs the full `CompoundDesign`. */
+  final class Cand(
+      cfg: SearchConfig, s1: GearSet, s2: GearSet,
+      ratio: Double, wellConditioned: Boolean, module1: Double, module2: Double
+  ):
+    private var built: CompoundDesign = null
+    def design: CompoundDesign =
+      if built == null then
+        built = Compounder.design(cfg, s1, Option(s2), ratio, wellConditioned, module1, module2)
+      built
