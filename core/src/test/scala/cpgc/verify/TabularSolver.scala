@@ -81,45 +81,53 @@ object TabularSolver:
       case 2 =>
         // Only the shared-carrier family is in coverage: one coupling must be
         // CarrierToCarrier; the other one closes the remaining DOF.
-        val other: Coupling =
-          if topology.firstCoupling == Coupling.CarrierToCarrier then topology.secondCoupling
-          else if topology.secondCoupling == Coupling.CarrierToCarrier then topology.firstCoupling
-          else return None
-        val s2set = s2.getOrElse(return None)
-        val ts2 = s2set.sun.toDouble
-        val tp2 = s2set.planet.toDouble
-        val tr2 = s2set.ring.toDouble
-
-        // A sun-less stage is the same stage with a *virtual* sun Ts = Tr − 2·Tp:
-        // the ring and planet motions (ωR − ωC = −Ts·b, planet = −Ts·Tr/Tp·b)
-        // do not depend on whether that sun gear physically exists, and
-        // `Topology` forbids pinning or welding an absent sun. So the same
-        // coefficients apply; only `RoleSolver`'s rows differ (no sun mesh).
-        //
-        // κ such that b2 = κ·b1, derived per remaining coupling (see class doc).
-        val kappa: Option[Double] = other match
-          case Coupling.PlanetStack =>
-            // b1·Tr1·Ts1/Tp1 = b2·Tr2·Ts2/Tp2
-            val d = tr2 * ts2 * tp1
-            if d == 0.0 then None else Some((tr1 * ts1 * tp2) / d)
-          case Coupling.RingToSun =>   // −b1·Ts1 = b2·Tr2
-            if tr2 == 0.0 then None else Some(-ts1 / tr2)
-          case Coupling.SunToRing =>   // b1·Tr1 = −b2·Ts2
-            if ts2 == 0.0 then None else Some(-tr1 / ts2)
-          case Coupling.RingToRing =>  // b1·Ts1 = b2·Ts2
-            if ts2 == 0.0 then None else Some(ts1 / ts2)
-          case Coupling.SunToSun =>    // b1·Tr1 = b2·Tr2
-            if tr2 == 0.0 then None else Some(tr1 / tr2)
-          case _ => None // carrier-involving couplings: out of coverage
-        kappa.map { k =>
-          {
-            case Body.S1 => tr1
-            case Body.R1 => -ts1
-            case Body.C1 => 0.0
-            case Body.S2 => k * tr2
-            case Body.R2 => -k * ts2
-            case Body.C2 => 0.0
-          }
-        }
+        val otherOpt: Option[Coupling] =
+          if topology.firstCoupling == Coupling.CarrierToCarrier then Some(topology.secondCoupling)
+          else if topology.secondCoupling == Coupling.CarrierToCarrier then Some(topology.firstCoupling)
+          else None
+        for
+          other <- otherOpt
+          s2set <- s2
+          f     <- stage2Coefficients(other, ts1, tr1, tp1, s2set)
+        yield f
 
       case _ => None
+
+  private def stage2Coefficients(
+      other: Coupling, ts1: Double, tr1: Double, tp1: Double, s2set: GearSet
+  ): Option[Body => Double] =
+    val ts2 = s2set.sun.toDouble
+    val tp2 = s2set.planet.toDouble
+    val tr2 = s2set.ring.toDouble
+
+    // A sun-less stage is the same stage with a *virtual* sun Ts = Tr − 2·Tp:
+    // the ring and planet motions (ωR − ωC = −Ts·b, planet = −Ts·Tr/Tp·b)
+    // do not depend on whether that sun gear physically exists, and
+    // `Topology` forbids pinning or welding an absent sun. So the same
+    // coefficients apply; only `RoleSolver`'s rows differ (no sun mesh).
+    //
+    // κ such that b2 = κ·b1, derived per remaining coupling (see class doc).
+    val kappa: Option[Double] = other match
+      case Coupling.PlanetStack =>
+        // b1·Tr1·Ts1/Tp1 = b2·Tr2·Ts2/Tp2
+        val d = tr2 * ts2 * tp1
+        if d == 0.0 then None else Some((tr1 * ts1 * tp2) / d)
+      case Coupling.RingToSun =>   // −b1·Ts1 = b2·Tr2
+        if tr2 == 0.0 then None else Some(-ts1 / tr2)
+      case Coupling.SunToRing =>   // b1·Tr1 = −b2·Ts2
+        if ts2 == 0.0 then None else Some(-tr1 / ts2)
+      case Coupling.RingToRing =>  // b1·Ts1 = b2·Ts2
+        if ts2 == 0.0 then None else Some(ts1 / ts2)
+      case Coupling.SunToSun =>    // b1·Tr1 = b2·Tr2
+        if tr2 == 0.0 then None else Some(tr1 / tr2)
+      case _ => None // carrier-involving couplings: out of coverage
+    kappa.map { k =>
+      {
+        case Body.S1 => tr1
+        case Body.R1 => -ts1
+        case Body.C1 => 0.0
+        case Body.S2 => k * tr2
+        case Body.R2 => -k * ts2
+        case Body.C2 => 0.0
+      }
+    }

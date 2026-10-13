@@ -31,7 +31,7 @@ final case class Topology(
 ):
   require(stages == 1 || stages == 2, s"stages must be 1 or 2, got $stages")
 
-  // Two identical welds are one constraint, not two (catalogue #7). Single
+  // Two identical welds are one constraint, not two. Single
   // stage topologies don't use the coupling fields.
   require(
     stages == 1 || firstCoupling != secondCoupling,
@@ -69,12 +69,9 @@ final case class Topology(
   val input:  Body = roles.collectFirst { case (b, BodyRole.Input)  => b }.get
   val output: Body = roles.collectFirst { case (b, BodyRole.Output) => b }.get
   val fixed:  Body = roles.collectFirst { case (b, BodyRole.Fixed)  => b }.get
-  def freeBodies: Set[Body] = roles.collect { case (b, BodyRole.Free) => b }.toSet
 
   /** Bodies that physically exist. */
   val presentBodies: Set[Body] = Body.present(stages, absent)
-
-  def isPresent(b: Body): Boolean = presentBodies.contains(b)
 
   /** True iff stage 1's sun gear physically exists. */
   def s1Present: Boolean = !absent.contains(Body.S1)
@@ -182,6 +179,23 @@ object Topology:
       Body.R1 -> BodyRole.Fixed
     )
   )
+
+  /** Ring-to-sun cascade: shared carrier + `R1 ≡ S2`. */
+  val ringToSunCascade: Topology = compound(
+    Body.S1, Body.R2, Body.R1, Coupling.CarrierToCarrier, Coupling.RingToSun)
+
+  /** Ravigneaux family: `C1 ≡ S2` + `R1 ≡ R2`. */
+  val ravigneaux: Topology = compound(
+    Body.S1, Body.C2, Body.R1, Coupling.CarrierToSun, Coupling.RingToRing)
+
+  /** Simpson family: `C1 ≡ R2` + `S1 ≡ S2`. */
+  val simpson: Topology = compound(
+    Body.S1, Body.C2, Body.R1, Coupling.CarrierToRing, Coupling.SunToSun)
+
+  /** Two-stage topology with the three pinned bodies given and every other body free. */
+  private def compound(in: Body, out: Body, fixed: Body, first: Coupling, second: Coupling): Topology =
+    val pins = Map(in -> BodyRole.Input, out -> BodyRole.Output, fixed -> BodyRole.Fixed)
+    Topology(2, Body.all(2).map(b => b -> pins.getOrElse(b, BodyRole.Free)).toMap, first, second)
 
   val default: Topology = standardCompound
 

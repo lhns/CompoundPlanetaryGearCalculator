@@ -14,18 +14,15 @@ class RoleSolverSpec extends FunSuite:
     val p = rng.between(8, 30)
     GearSet(Teeth(s), Teeth(p), 3)
 
-  // The legacy `Compounder.compoundRatio` cross-checks that used to live here
-  // were deleted alongside `compoundRatio` itself (Edge-Case Catalogue #9).
-  // The N-version cross-check in `cpgc.verify.TabularSolverSpec` — RoleSolver
-  // vs an independent superposition-method solver, >13 000 combinations —
-  // subsumes them with stronger, code-independent coverage.
+  // The N-version cross-check against an independent superposition-method
+  // solver lives in `cpgc.verify.TabularSolverSpec`.
 
-  test("forward solver matches 1 / GearSet.sunCarrierRatio for the single stage — 100 random gear sets") {
+  test("forward solver matches 1 + R/S for the single stage — 100 random gear sets") {
     val rng = new Random(Seed + 3)
     val topology = Topology.singleStage
     for _ <- 1 to 100 do
       val s = randomSunPlanetRing(rng)
-      val expected = Ratio(1.0 / s.sunCarrierRatio)
+      val expected = Ratio(1.0 + s.ring.toDouble / s.sun.toDouble)
       val actual   = RoleSolver.ratio(topology, s, None).getOrElse(fail(s"None for single $s"))
       assert(math.abs(expected.value - actual.value) < 1e-9,
         s"single stage $s: expected ${expected.value}, got ${actual.value}")
@@ -43,6 +40,12 @@ class RoleSolverSpec extends FunSuite:
     val s2 = GearSet(Teeth(22), Teeth(14), 3)
     val r  = RoleSolver.ratio(Topology.cdcpCompound, s1, Some(s2)).get.value
     assertEqualsDouble(r, 15.0, 1e-9)
+  }
+
+  test("a kinematically singular Standard pair (Tp1·Tr2 = Tr1·Tp2 gives zero output) has no ratio") {
+    val a = GearSet(Teeth(24), Teeth(12), 3) // ring=48
+    val b = GearSet(Teeth(48), Teeth(24), 3) // ring=96
+    assertEquals(RoleSolver.ratio(Topology.standardCompound, a, Some(b)), None)
   }
 
   test("hand-derived: Single stage S=20/P=15/R=50 gives ratio 3.5") {
@@ -100,11 +103,10 @@ class RoleSolverSpec extends FunSuite:
   test("solver is total: a 2-stage topology with no stage-2 gear set returns None (no throw)") {
     // Happens transiently in the UI when the topology flips to compound before
     // a fresh compound design arrives. The solver must be total — `None`, not
-    // an exception. (Edge-Case Catalogue: RoleSolver totality.)
+    // an exception.
     val s1 = GearSet(Teeth(20), Teeth(15), 3)
     assertEquals(RoleSolver.ratio(Topology.standardCompound, s1, None), None)
     assertEquals(RoleSolver.velocities(Topology.standardCompound, s1, None, 1.0), None)
-    assertEquals(RoleSolver.ratioWithConditioning(Topology.standardCompound, s1, None), None)
   }
 
   // ── Textbook golden oracles ────────────────────────────────────────────────
@@ -157,14 +159,7 @@ class RoleSolverSpec extends FunSuite:
     val rng = new Random(Seed + 7)
     val ε   = 1e-9
 
-    def standard(second: Coupling): Topology = Topology(
-      stages = 2,
-      roles = Map(
-        Body.S1 -> BodyRole.Input,  Body.R2 -> BodyRole.Output, Body.R1 -> BodyRole.Fixed,
-        Body.C1 -> BodyRole.Free,   Body.S2 -> BodyRole.Free,   Body.C2 -> BodyRole.Free
-      ),
-      firstCoupling = Coupling.CarrierToCarrier, secondCoupling = second
-    )
+    def standard(second: Coupling): Topology = Topology.standardCompound.copy(secondCoupling = second)
     val topologies = Vector(
       Topology.standardCompound, Topology.cdcpCompound,
       standard(Coupling.RingToSun), standard(Coupling.SunToRing),

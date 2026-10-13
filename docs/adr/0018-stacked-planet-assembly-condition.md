@@ -23,5 +23,5 @@ assembled. The smallest counterexample is `Tp1 = Tp2 = 6, Tr1 = 18, Tr2 = 19, N 
 ## Consequences
 - Fewer stacked designs, all buildable from identical planets. Opting into `phasedPinions` restores the
   rest at the cost of N different planet parts.
-- `SpacingExperimentSpec` and ADR 0012's claim that the residuals were "artefacts" were wrong. Those
+- The `SpacingExperimentSpec` diagnostic (now deleted; `AssemblyConditionSpec` replaces it) and ADR 0012's claim that the residuals were "artefacts" were wrong. Those
   residuals were this condition.

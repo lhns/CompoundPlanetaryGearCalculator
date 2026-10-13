@@ -18,7 +18,8 @@ object ContractSupport:
   final case class Case(name: String, topology: Topology):
     def config(base: SearchConfig): SearchConfig = base.copy(topology = topology)
 
-  private def comp(
+  /** Two-stage topology with the three pinned bodies given, `absent` suns removed and every other body free. */
+  def compound(
       in: Body, out: Body, fix: Body, first: Coupling, second: Coupling, absent: Set[Body] = Set.empty
   ): Topology =
     val pins = Map(in -> BodyRole.Input, out -> BodyRole.Output, fix -> BodyRole.Fixed)
@@ -43,16 +44,16 @@ object ContractSupport:
   )
 
   val novel: Vector[(String, Topology)] = Vector(
-    "PS+CC std-roles"            -> comp(S1, R2, R1, PlanetStack, CarrierToCarrier),
-    "CC+RingToSun std-roles"     -> comp(S1, R2, R1, CarrierToCarrier, RingToSun),
-    "SunToCarrier+RingToSun"     -> comp(S1, R2, R1, SunToCarrier, RingToSun),
-    "CC+SunToRing std-roles"     -> comp(S1, R2, R1, CarrierToCarrier, SunToRing),
-    "CC+RingToRing C1fixed"      -> comp(S1, R2, C1, CarrierToCarrier, RingToRing),
-    "CC+SunToSun std-roles"      -> comp(S1, R2, R1, CarrierToCarrier, SunToSun),
-    "NSS-like (C1 fixed)"        -> comp(S1, R2, C1, CarrierToCarrier, PlanetStack, Set(S2)),
-    "CDCP-like (S1 fixed)"       -> comp(C1, R2, S1, CarrierToCarrier, PlanetStack),
+    "PS+CC std-roles"            -> compound(S1, R2, R1, PlanetStack, CarrierToCarrier),
+    "CC+RingToSun std-roles"     -> compound(S1, R2, R1, CarrierToCarrier, RingToSun),
+    "SunToCarrier+RingToSun"     -> compound(S1, R2, R1, SunToCarrier, RingToSun),
+    "CC+SunToRing std-roles"     -> compound(S1, R2, R1, CarrierToCarrier, SunToRing),
+    "CC+RingToRing C1fixed"      -> compound(S1, R2, C1, CarrierToCarrier, RingToRing),
+    "CC+SunToSun std-roles"      -> compound(S1, R2, R1, CarrierToCarrier, SunToSun),
+    "NSS-like (C1 fixed)"        -> compound(S1, R2, C1, CarrierToCarrier, PlanetStack, Set(S2)),
+    "CDCP-like (S1 fixed)"       -> compound(C1, R2, S1, CarrierToCarrier, PlanetStack),
     "CDCP sun-less (both)"       -> Topology.sunlessCdcpCompound,
-    "CDCP S1-absent"             -> comp(C1, R2, R1, CarrierToCarrier, PlanetStack, Set(S1)),
+    "CDCP S1-absent"             -> compound(C1, R2, R1, CarrierToCarrier, PlanetStack, Set(S1)),
     "single S1->R1 C1fixed"      -> single(S1, R1, C1),
     "single C1->S1 R1fixed"      -> single(C1, S1, R1)
   )

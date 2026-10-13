@@ -12,12 +12,8 @@ import java.nio.file.{Files, Paths}
   * Enumerates the entire topology design space (every constructible
   * combination of stages × role tuple × coupling pair), classifies each
   * combination, and groups the survivors into kinematic equivalence classes.
-  * Output is written to `docs/topology-enumeration.md` for the next UI plan
-  * to lean on.
-  *
-  * The plan that introduced this is `i-want-you-to-quirky-fog.md` (rev:
-  * "Enumerate the full topology design space"). Methodology and caveats are
-  * in the generated document.
+  * Output goes to `target/diag/topology-enumeration.{md,csv}` (untracked);
+  * methodology and caveats are in the generated document.
   */
 class TopologyEnumerationDiag extends FunSuite:
   private val diagnostic = munit.Tag("diagnostic")
@@ -469,13 +465,13 @@ class TopologyEnumerationDiag extends FunSuite:
     sb.result()
 
   // ── The diagnostic test ────────────────────────────────────────────────────
-  test("DIAG: enumerate the full topology design space → docs/topology-enumeration.md".tag(diagnostic)) {
+  test("DIAG: enumerate the full topology design space → target/diag/topology-enumeration.md".tag(diagnostic)) {
     val rows = enumerateAll()
     val doc = buildDoc(rows)
     val csv = buildCsv(rows)
-    val mdPath  = Paths.get("docs/topology-enumeration.md")
-    val csvPath = Paths.get("docs/topology-enumeration.csv")
-    // Ensure the docs/ directory exists (it does in the repo, but be defensive).
+    val mdPath  = Paths.get("target/diag/topology-enumeration.md")
+    val csvPath = Paths.get("target/diag/topology-enumeration.csv")
+    // Ensure the output directory exists.
     Files.createDirectories(mdPath.getParent)
     Files.writeString(mdPath, doc)
     Files.writeString(csvPath, csv)

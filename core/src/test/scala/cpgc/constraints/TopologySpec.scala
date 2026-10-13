@@ -182,7 +182,6 @@ class TopologySpec extends FunSuite:
     assertEquals(t.input,  Body.S1)
     assertEquals(t.output, Body.R2)
     assertEquals(t.fixed,  Body.R1)
-    assertEquals(t.freeBodies, Set(Body.C1, Body.S2, Body.C2))
   }
 
   test("s1Present / s2Present") {

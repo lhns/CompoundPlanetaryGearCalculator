@@ -116,8 +116,6 @@ object Compounder:
       topology         = topology,
       ratio            = r,
       efficiency       = Efficiency.overall(topology),
-      spacingOk        = true,  // gated by `accept`
-      profileShiftHint = None,  // standard-module designs match exactly
       validity         = validity
     )
 

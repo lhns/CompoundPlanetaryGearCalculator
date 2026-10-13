@@ -318,51 +318,6 @@ object UiLogic:
 
   // ── Gearbox presets ────────────────────────────────────────────────────────
 
-  /** Ring-to-sun cascade: classic shared carrier + `R1 ≡ S2`. */
-  val ringToSunCascadeTopology: Topology = Topology(
-    stages = 2,
-    roles = Map(
-      Body.S1 -> BodyRole.Input,
-      Body.R2 -> BodyRole.Output,
-      Body.R1 -> BodyRole.Fixed,
-      Body.C1 -> BodyRole.Free,
-      Body.S2 -> BodyRole.Free,
-      Body.C2 -> BodyRole.Free
-    ),
-    firstCoupling  = Coupling.CarrierToCarrier,
-    secondCoupling = Coupling.RingToSun
-  )
-
-  /** Ravigneaux family: `C1 ≡ S2` + `R1 ≡ R2`. */
-  val ravigneauxTopology: Topology = Topology(
-    stages = 2,
-    roles = Map(
-      Body.S1 -> BodyRole.Input,
-      Body.C2 -> BodyRole.Output,
-      Body.R1 -> BodyRole.Fixed,
-      Body.C1 -> BodyRole.Free,
-      Body.S2 -> BodyRole.Free,
-      Body.R2 -> BodyRole.Free
-    ),
-    firstCoupling  = Coupling.CarrierToSun,
-    secondCoupling = Coupling.RingToRing
-  )
-
-  /** Simpson family: `C1 ≡ R2` + `S1 ≡ S2`. */
-  val simpsonTopology: Topology = Topology(
-    stages = 2,
-    roles = Map(
-      Body.S1 -> BodyRole.Input,
-      Body.C2 -> BodyRole.Output,
-      Body.R1 -> BodyRole.Fixed,
-      Body.C1 -> BodyRole.Free,
-      Body.S2 -> BodyRole.Free,
-      Body.R2 -> BodyRole.Free
-    ),
-    firstCoupling  = Coupling.CarrierToRing,
-    secondCoupling = Coupling.SunToSun
-  )
-
   /** Presets the user can pick (everything but the derived `Custom`). */
   val selectablePresets: Seq[GearboxPreset] = GearboxPreset.values.toSeq.filter(_ != GearboxPreset.Custom)
 
@@ -373,9 +328,9 @@ object UiLogic:
     case GearboxPreset.CarrierDriven     => Topology.cdcpCompound
     case GearboxPreset.SunlessCdcp       => Topology.sunlessCdcpCompound
     case GearboxPreset.NoSecondSun       => Topology.nssCompound
-    case GearboxPreset.RingToSunCascade  => ringToSunCascadeTopology
-    case GearboxPreset.Ravigneaux        => ravigneauxTopology
-    case GearboxPreset.Simpson           => simpsonTopology
+    case GearboxPreset.RingToSunCascade  => Topology.ringToSunCascade
+    case GearboxPreset.Ravigneaux        => Topology.ravigneaux
+    case GearboxPreset.Simpson           => Topology.simpson
     case GearboxPreset.Custom            => Topology.standardCompound // unused: not selectable
 
   /** Reverse-lookup: which preset (if any) does this `Topology` match? */

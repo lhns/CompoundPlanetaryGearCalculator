@@ -1,7 +1,8 @@
 package cpgc.search
 
-import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
+import cpgc.constraints.{Body, Coupling, Topology}
 import cpgc.domain.{GearSet, Teeth}
+import cpgc.verify.ContractSupport
 import munit.FunSuite
 
 /** Forward-solver coverage for independent-carrier compounds — coupling pairs
@@ -20,10 +21,7 @@ class IndependentCarrierSpec extends FunSuite:
       first: Coupling, second: Coupling,
       input: Body, output: Body, fixed: Body
   ): Topology =
-    val pinned = Map(input -> BodyRole.Input, output -> BodyRole.Output, fixed -> BodyRole.Fixed)
-    val roles = Vector(Body.S1, Body.C1, Body.R1, Body.S2, Body.C2, Body.R2)
-      .map(b => b -> pinned.getOrElse(b, BodyRole.Free)).toMap
-    Topology(stages = 2, roles = roles, firstCoupling = first, secondCoupling = second)
+    ContractSupport.compound(input, output, fixed, first, second)
 
   // Ravigneaux-family layout: C1≡S2 weld + R1≡R2 weld. With R1 fixed, R2 is
   // also fixed (rings welded), so the output must be C2 — not R2.
