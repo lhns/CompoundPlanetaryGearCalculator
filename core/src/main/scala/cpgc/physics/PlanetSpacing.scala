@@ -4,15 +4,15 @@ import cpgc.domain.GearSet
 
 object PlanetSpacing:
 
-  /** True when planet gears do not overlap each other around the sun.
+  /** True when adjacent planets keep at least `clearance` modules of tip gap
+    * (ADR 0016; `clearance = 0` is the plain no-overlap check of ADR 0005).
     *
-    * Adjacent planet centers form a chord of length `2 * C2C * sin(pi/n)` where
-    * `C2C = (sun + planet) / 2` (in tooth units). Planets fit when each planet's
-    * outer diameter `planet + 2` (addendum = module on each side) is less than that
-    * chord. Module is a common scaling factor so it cancels.
+    * Adjacent planet centres form a chord of length `(Ts + Tp)·sin(π/N)` (tooth
+    * units; the module cancels). A planet's outer diameter is `Tp + 2`, so the
+    * planets fit when `Tp + 2 + clearance < (Ts + Tp)·sin(π/N)`. A sun-less
+    * stage uses its virtual sun `Tr − 2·Tp`.
     */
-  def planetsFitWithoutOverlap(set: GearSet): Boolean =
-    val c2c        = (set.sun.toDouble + set.planet.toDouble) / 2.0
-    val chord      = 2.0 * c2c * math.sin(math.Pi / set.numPlanets)
-    val planetOD   = set.planet.toDouble + 2.0
-    planetOD < chord
+  def planetsFitWithoutOverlap(set: GearSet, clearance: Double): Boolean =
+    val chord    = (set.sun.toDouble + set.planet.toDouble) * math.sin(math.Pi / set.numPlanets)
+    val planetOD = set.planet.toDouble + 2.0
+    planetOD + clearance < chord

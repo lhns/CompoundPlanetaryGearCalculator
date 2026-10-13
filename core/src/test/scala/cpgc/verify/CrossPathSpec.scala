@@ -22,19 +22,16 @@ class CrossPathSpec extends FunSuite:
 
   private val IdKind  = "identical-stage pairs (a,a) accepted by compound() are searched"
   private val NegKind  = "negative-ratio designs are found when targeting |ratio|"
-  private val PosKind  = "positive-ratio designs with N1==N2 are found when targeting their ratio (control)"
-  private val TgtKind  = "targets: searchTargeted subset of search"
-  private val StepKind = "targets: searchSteps subset of search"
 
   /** (case, kind) -> bug ids for expected failures (observed failures, attributed by cluster analysis). */
   private val known: Map[(String, String), String] =
-    val legacySun = for c <- Vector("cdcp[topology]", "cdcp[mode-only]", "nss[topology]", "nss[mode-only]"); k <- Vector(TgtKind, StepKind) yield (c, k) -> "B4"
-    val sign = (for c <- Vector("std[topology]", "cdcp[topology]", "nss[topology]", "std[mode-only]", "cdcp[mode-only]", "nss[mode-only]",
-                  "PS+CC std-roles", "CC+RingToRing C1fixed", "CC+SunToSun std-roles", "NSS-like (C1 fixed)") yield (c, NegKind) -> "B4") ++ Vector(
-      ("PS+RingToSun std-roles", NegKind) -> "B4,B5", ("single S1->R1 C1fixed", NegKind) -> "B3,B4")
-    val ident = for c <- Vector("PS+RingToSun std-roles", "CC+RingToSun std-roles", "SunToCarrier+RingToSun", "CC+SunToRing std-roles",
-                  "CC+RingToRing C1fixed", "NSS-like (C1 fixed)", "CDCP-like (S1 fixed)") yield (c, IdKind) -> "B4"
-    (legacySun ++ sign ++ ident ++ Vector(("SunToCarrier+RingToSun", PosKind) -> "B5")).toMap
+    val sign = (for c <- Vector("std[topology]", "cdcp[topology]", "nss[topology]",
+                  "PS+CC std-roles", "CC+RingToRing C1fixed", "CC+SunToSun std-roles", "NSS-like (C1 fixed)",
+                  "CDCP sun-less (both)", "CDCP S1-absent") yield (c, NegKind) -> "B4") ++ Vector(
+      ("single S1->R1 C1fixed", NegKind) -> "B4")
+    val ident = for c <- Vector("CC+RingToSun std-roles", "SunToCarrier+RingToSun", "CC+SunToRing std-roles",
+                  "CC+RingToRing C1fixed", "CDCP-like (S1 fixed)") yield (c, IdKind) -> "B4"
+    (sign ++ ident).toMap
 
   for c <- cases do
     def reg(kind: String)(body: => Unit): Unit =
@@ -77,7 +74,9 @@ class CrossPathSpec extends FunSuite:
       for _ <- 0 until NConfigs do
         val cfg  = c.config(randomConfig(rng, withTargets = false))
         val all  = keys(Calculator.search(cfg))
-        val same = cpgc.search.Enumerator.gearSets(cfg).flatMap(a => cpgc.search.Compounder.compound(cfg, a, a)).toVector
+        val pool2 = cpgc.search.Enumerator.stage2Sets(cfg).toSet
+        val same  = cpgc.search.Enumerator.stage1Sets(cfg).filter(pool2.contains)
+          .flatMap(a => cpgc.search.Compounder.compound(cfg, a, a)).toVector
         assertEquals(keys(same) -- all, Set.empty[Key], s"(a,a) designs missing from search ${cfgSummary(cfg)}")
     }
 

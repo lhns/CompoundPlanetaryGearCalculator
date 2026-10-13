@@ -87,3 +87,54 @@ object LinAlg:
       i -= 1
 
     Some((x, minPivot))
+
+  /** Allocation-free variant for the solver hot path: solves the `n×n` system
+    * stored row-major in `m` (length `n·n`) against `r` (length `n`), **in
+    * place**. On success the solution is left in `r` and the smallest pivot
+    * magnitude is returned; on a singular matrix (pivot < `eps`) it returns
+    * `-1.0` and the contents of `m` / `r` are unspecified. Same elimination as
+    * `solveDetailed`. */
+  def solveFlat(m: Array[Double], r: Array[Double], n: Int, eps: Double = 1e-12): Double =
+    var minPivot = Double.PositiveInfinity
+    var col = 0
+    while col < n do
+      var pivotRow = col
+      var pivotMag = math.abs(m(col * n + col))
+      var k = col + 1
+      while k < n do
+        val mag = math.abs(m(k * n + col))
+        if mag > pivotMag then
+          pivotMag = mag
+          pivotRow = k
+        k += 1
+      if pivotMag < eps || pivotMag.isNaN then return -1.0
+      if pivotMag < minPivot then minPivot = pivotMag
+      if pivotRow != col then
+        var j = 0
+        while j < n do
+          val t = m(col * n + j); m(col * n + j) = m(pivotRow * n + j); m(pivotRow * n + j) = t
+          j += 1
+        val tr = r(col); r(col) = r(pivotRow); r(pivotRow) = tr
+      val pivot = m(col * n + col)
+      var i = col + 1
+      while i < n do
+        val factor = m(i * n + col) / pivot
+        if factor != 0.0 then
+          var j = col
+          while j < n do
+            m(i * n + j) -= factor * m(col * n + j)
+            j += 1
+          r(i) -= factor * r(col)
+        i += 1
+      col += 1
+    // Back-substitution, overwriting r with the solution.
+    var i = n - 1
+    while i >= 0 do
+      var sum = r(i)
+      var j = i + 1
+      while j < n do
+        sum -= m(i * n + j) * r(j)
+        j += 1
+      r(i) = sum / m(i * n + i)
+      i -= 1
+    minPivot

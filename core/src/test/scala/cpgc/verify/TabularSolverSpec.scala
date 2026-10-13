@@ -44,22 +44,44 @@ class TabularSolverSpec extends FunSuite:
     "RingToSun"   -> compound(Coupling.RingToSun),
     "SunToRing"   -> compound(Coupling.SunToRing),
     "RingToRing"  -> compound(Coupling.RingToRing),
-    "SunToSun"    -> compound(Coupling.SunToSun)
+    "SunToSun"    -> compound(Coupling.SunToSun),
+    // Absent suns (ADR 0015 §2): the oracle solves a sun-less stage with its virtual sun.
+    "sun-less CDCP (both absent)" -> Topology.sunlessCdcpCompound,
+    "CDCP, S1 absent"             -> cdcpWith(absent = Set(Body.S1)),
+    "CDCP, S2 absent"             -> cdcpWith(absent = Set(Body.S2)),
+    "PS first, CC second"         -> Topology(2, Topology.standardCompound.roles, Coupling.PlanetStack, Coupling.CarrierToCarrier),
+    "CC+RingToRing, S2 absent"    -> cdcpWith(Coupling.RingToRing, Set(Body.S2), Body.S1, Body.C1, Body.R2),
+    "CC+RingToRing, S1 absent"    -> cdcpWith(Coupling.RingToRing, Set(Body.S1), Body.C1, Body.R1, Body.S2),
+    "CC+SunToRing, S2 absent"     -> cdcpWith(Coupling.SunToRing, Set(Body.S2), Body.S1, Body.C1, Body.R1)
   )
+
+  /** Shared-carrier compound with the given second coupling, absent suns and pins. */
+  private def cdcpWith(
+      second: Coupling = Coupling.PlanetStack,
+      absent: Set[Body],
+      in: Body = Body.C1, fixed: Body = Body.R1, out: Body = Body.R2
+  ): Topology =
+    val pins = Map(in -> BodyRole.Input, fixed -> BodyRole.Fixed, out -> BodyRole.Output)
+    Topology(
+      2,
+      Body.values.map(b => b -> (if absent(b) then BodyRole.Absent else pins.getOrElse(b, BodyRole.Free))).toMap,
+      Coupling.CarrierToCarrier,
+      second
+    )
 
   private def randomGearSet(rng: Random): GearSet =
     GearSet(Teeth(rng.between(8, 60)), Teeth(rng.between(8, 30)), rng.between(3, 6))
 
-  /** For NSS the stage-2 gear set is built from a virtual sun S = R − 2P, so we
-    * generate it the way the search does. */
-  private def randomNssStage2(rng: Random): GearSet =
+  /** A sun-less stage is built from a virtual sun S = R − 2P, so we generate it
+    * the way the search does. */
+  private def randomSunlessStage(rng: Random): GearSet =
     val p = rng.between(8, 30)
     val r = rng.between(2 * p + 1, 2 * p + 50)
     GearSet(Teeth(r - 2 * p), Teeth(p), rng.between(3, 6))
 
   test("RoleSolver agrees with the independent TabularSolver across a random sweep") {
     val rng = new Random(Seed)
-    val iterations = 1500 // × 9 topologies ≈ 13 500 combinations
+    val iterations = 1500 // × 16 topologies ≈ 24 000 combinations
     var checked = 0
     val disagreements = scala.collection.mutable.ArrayBuffer.empty[String]
 
@@ -68,7 +90,7 @@ class TabularSolverSpec extends FunSuite:
       for (name, topo) <- coveredTopologies do
         val s2: Option[GearSet] = topo.stages match
           case 1                       => None
-          case 2 if !topo.s2Present    => Some(randomNssStage2(rng))
+          case 2 if !topo.s2Present    => Some(randomSunlessStage(rng))
           case _                       => Some(randomGearSet(rng))
 
         val role    = RoleSolver.ratio(topo, s1, s2).map(_.value)
@@ -87,7 +109,7 @@ class TabularSolverSpec extends FunSuite:
             // disagreement worth triaging.
             disagreements += s"[$name] s1=$s1 s2=$s2 : RoleSolver=$role TabularSolver=$tabular (shape mismatch)"
 
-    assert(checked > 10000, s"expected >10000 numeric comparisons, got $checked")
+    assert(checked > 15000, s"expected >15000 numeric comparisons, got $checked")
     assert(
       disagreements.isEmpty,
       s"${disagreements.size} disagreement(s) between the two solvers; first 5:\n" +

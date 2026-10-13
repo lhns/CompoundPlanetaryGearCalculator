@@ -565,12 +565,12 @@ object App:
               td(cls := "num", fmt3(d.efficiency)),
               td(d.stage1.set.numPlanets.toString),
               td(if d.spacingOk then "ok" else "—"),
-              td(d.stage1.set.sun.toInt.toString),
+              td(if d.topology.s1Present then d.stage1.set.sun.toInt.toString else "—"),
               td(d.stage1.set.planet.toInt.toString),
               td(d.stage1.set.ring.toInt.toString),
               td(cls := "num", fmt3(d.stage1.module.value)),
               td(d.stage2.fold("-") { s =>
-                if d.mode == Mode.NSS then "—" else s.set.sun.toInt.toString
+                if !d.topology.s2Present then "—" else s.set.sun.toInt.toString
               }),
               td(d.stage2.fold("-")(_.set.planet.toInt.toString)),
               td(d.stage2.fold("-")(_.set.ring.toInt.toString)),
@@ -629,14 +629,6 @@ object App:
       // Plain-English description of the chosen preset.
       div(cls := "topology-derived",
         child.text <-- presetSig.map(presetDescription)
-      ),
-      // Decoupled-stage hint (when the role tuple makes one stage irrelevant).
-      div(cls := "topology-hint",
-        child.text <-- v.signal.map { t =>
-          if Topology.isStageDecoupled(t) then
-            "⚠ Single-stage equivalent — try Single stage for cleaner results."
-          else ""
-        }
       ),
       // ── Advanced section — couplings, roles, S2 toggle ────────────────────
       div(cls := "advanced-section",

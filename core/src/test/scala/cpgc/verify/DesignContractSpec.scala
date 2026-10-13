@@ -34,7 +34,7 @@ class DesignContractSpec extends FunSuite:
     case "steps"    => Calculator.searchSteps(cfg).flatten.toVector
 
   private def check(cfg: SearchConfig, d: CompoundDesign): Vector[Violation] =
-    val t   = cfg.effectiveTopology
+    val t   = cfg.topology
     val out = Vector.newBuilder[Violation]
     val s1  = d.stage1.set
     def v(cat: String, msg: String): Unit = out += Violation(cat, s"$msg | ${fmt(d)} | ${cfgSummary(cfg)}")
@@ -52,7 +52,7 @@ class DesignContractSpec extends FunSuite:
     val stages = Vector(d.stage1) ++ d.stage2
     stages.foreach { st =>
       if st.set.ring.toInt != st.set.sun.toInt + 2 * st.set.planet.toInt then v("geometry", "r != s + 2p")
-      if !planetsFit(st.set) then v("geometry", s"planets overlap ${st.set}")
+      if !planetsFit(st.set, cfg) then v("geometry", s"planets overlap ${st.set}")
     }
 
     // teeth within bounds (where the body exists)
@@ -63,10 +63,10 @@ class DesignContractSpec extends FunSuite:
       else if !inB(g.ring.toInt, cfg.ringTeeth) then Some(s"ring ${g.ring.toInt} out of ${cfg.ringTeeth}")
       else if !inB(g.numPlanets, cfg.planets) then Some(s"N ${g.numPlanets} out of ${cfg.planets}")
       else None
-    teethOk(s1, sunExists = true).foreach(m => v("teeth", s"stage1: $m"))
+    teethOk(s1, sunExists = t.s1Present).foreach(m => v("teeth", s"stage1: $m"))
     d.stage2.foreach(s => teethOk(s.set, t.s2Present).foreach(m => v("teeth", s"stage2: $m")))
     // sun/planet factor applies to every stage with a sun
-    if s1.planet.toDouble >= cfg.sunPlanetFactor * s1.sun.toDouble then v("teeth", "stage1 violates sunPlanetFactor")
+    if t.s1Present && s1.planet.toDouble >= cfg.sunPlanetFactor * s1.sun.toDouble then v("teeth", "stage1 violates sunPlanetFactor")
     d.stage2.foreach { s =>
       if t.s2Present && s.set.planet.toDouble >= cfg.sunPlanetFactor * s.set.sun.toDouble then
         v("teeth", "stage2 violates sunPlanetFactor")
@@ -76,8 +76,16 @@ class DesignContractSpec extends FunSuite:
     if !specSpacingOk(t, s1, d.stage2.map(_.set)) then v("spacing", "violates intended spacing rule")
 
     // modules
-    val m1Expected = cfg.firstStageOD / (s1.ring.toDouble + 2.0)
-    if math.abs(d.stage1.module.value - m1Expected) > 1e-9 then v("module", s"m1 != OD/(R1+2) = $m1Expected")
+    specModule1(cfg, s1) match
+      case Some(m1) =>
+        if math.abs(d.stage1.module.value - m1) > 1e-9 then v("module", s"m1 != (OD - 2 wall)/(R1 + 2.5) = $m1")
+      case None => v("module", "design emitted although no positive finite module exists")
+    stages.foreach { st =>
+      val od = st.module.value * (st.set.ring.toDouble + 2.5) + 2.0 * cfg.ringWall
+      if math.abs(st.ringOuterDiameter - od) > 1e-9 then v("module", s"ringOuterDiameter ${st.ringOuterDiameter} != $od")
+    }
+    if math.abs(d.stage1.ringOuterDiameter - cfg.firstStageOD) > 1e-9 then
+      v("module", s"stage-1 ring OD ${d.stage1.ringOuterDiameter} != firstStageOD ${cfg.firstStageOD}")
     stages.foreach(st => if st.module.value < cfg.minModule then v("module", s"module ${st.module.value} < minModule"))
 
     // stacked => N1 == N2, equal centre distance
@@ -90,6 +98,9 @@ class DesignContractSpec extends FunSuite:
 
     // efficiency
     if !(d.efficiency > 0.0 && d.efficiency <= 1.0) then v("efficiency", s"efficiency ${d.efficiency}")
+    // 0.985 per mesh: 2 per stage with a sun, 1 per sun-less stage (ADR 0015 §7)
+    val meshes = (if t.s1Present then 2 else 1) + (if t.stages == 2 then (if t.s2Present then 2 else 1) else 0)
+    if math.abs(d.efficiency - math.pow(0.985, meshes)) > 1e-12 then v("efficiency", s"efficiency ${d.efficiency} != 0.985^$meshes")
     out.result()
 
   private val memo = mutable.HashMap.empty[(String, String), Outcome]
@@ -110,21 +121,11 @@ class DesignContractSpec extends FunSuite:
       Outcome(count, viol.toMap)
     })
 
-  /** (case, path, category) -> (bug id, observed). Only real production bugs. */
-  private val known: Map[(String, String, String), (String, String)] =
-    val b4 = for
-      m <- Vector("cdcp[topology]", "cdcp[mode-only]")
-      p <- Vector("targeted", "steps")
-    yield (m, p, "teeth") -> ("B4", "CDCP stage2ForLegacy skips sun range: cfg sun=7..9 planet=8..9 ring=24..27 N=4..5 spf=2, targets 3.41/12.64 emits S2=10 P2=8 N2=4 (sun 10 > 9)")
-    val b5 = for
-      m <- Vector("PS+CC std-roles", "PS+RingToSun std-roles")
-      p <- paths
-    yield (m, p, "stacked") -> ("B5", "first=PlanetStack: c2c not matched: S1=10 P1=10 N1=4 m1=4.6875, S2=12 P2=10 N2=4 m2=4.6875 -> c2c 93.75 vs 103.125")
-    val b3 = for
-      m <- Vector("single S1->R1 C1fixed", "single C1->S1 R1fixed")
-      p <- paths
-    yield (m, p, "single") -> ("B3", "single-stage topology with Mode.Standard goes down the compound path: stage2 = Some(S2=11 P2=9 N2=4) for S1=10 P1=10 N1=4")
-    (b4 ++ b5 ++ b3).toMap
+  /** (case, path, category) -> (bug id, observed). Only real production bugs.
+    * Empty since milestone A: B3 (single-stage custom roles), B5 (stacking read
+    * only the second coupling) and the CDCP closed-form sun-range skip (a B4
+    * facet) are fixed. */
+  private val known: Map[(String, String, String), (String, String)] = Map.empty
 
   for
     c    <- cases
@@ -142,20 +143,11 @@ class DesignContractSpec extends FunSuite:
         case Some((id, _)) => test(s"$id $name0".fail)(body())   // observed: see `known`
         case None          => test(name0)(body())
 
-  // -- B2: efficiency for novel topologies is driven by cfg.mode (Standard) --
-
-  // Observed: efficiency = 0.985^4 = 0.9413 (Standard, 4 meshes); with S2 absent only the
-  // planet-ring mesh exists in stage 2 (as for legacy NSS) -> expected 0.985^3.
-  test("B2 NSS-like novel topology (S2 absent) gets the 3-mesh NSS efficiency".fail) {
-    val c   = cases.find(_.name == "NSS-like (C1 fixed)").get
-    val cfg = c.config(randomConfig(new Random(5L), withTargets = false))
-    val ds  = Calculator.search(cfg).take(50).toVector
-    assert(ds.nonEmpty)
-    ds.foreach(d => assertEqualsDouble(d.efficiency, math.pow(0.985, 3), 1e-12, fmt(d)))
-  }
-
-  test("legacy topologies: design.mode equals the topology's legacy mode") {
-    for c <- cases.filter(_.topology.legacyMode.isDefined) do
+  test("design.topology is the config's topology and modeName names the legacy alias") {
+    for c <- cases do
       val cfg = c.config(randomConfig(new Random(6L), withTargets = false))
-      Calculator.search(cfg).take(20).foreach(d => assertEquals(Option(d.mode), c.topology.legacyMode, c.name))
+      Calculator.search(cfg).take(20).foreach { d =>
+        assertEquals(d.topology, c.topology, c.name)
+        assertEquals(d.modeName, c.topology.legacyMode.fold("Custom")(_.toString), c.name)
+      }
   }

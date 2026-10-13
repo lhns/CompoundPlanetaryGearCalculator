@@ -1,6 +1,6 @@
 package cpgc
 
-import cpgc.constraints.{SearchConfig, TeethBounds}
+import cpgc.constraints.{SearchConfig, TeethBounds, Topology}
 import cpgc.domain.{Mode, Ratio}
 import cpgc.search.Scorer
 import munit.FunSuite
@@ -14,7 +14,7 @@ class InverseSolverSpec extends FunSuite:
     */
   test("searchTargeted matches search() output for a Standard search") {
     val cfg = SearchConfig(
-      mode         = Mode.Standard,
+      topology         = Topology.fromMode(Mode.Standard),
       sunTeeth     = TeethBounds(10, 24),
       planetTeeth  = TeethBounds(10, 18),
       ringTeeth    = TeethBounds(40, 60),
@@ -41,7 +41,7 @@ class InverseSolverSpec extends FunSuite:
 
   test("inverse solver is faster than brute force for targeted search") {
     val cfg = SearchConfig(
-      mode         = Mode.Standard,
+      topology         = Topology.fromMode(Mode.Standard),
       sunTeeth     = TeethBounds(8, 80),
       planetTeeth  = TeethBounds(8, 20),
       ringTeeth    = TeethBounds(40, 200),

@@ -3,7 +3,7 @@ package cpgc.kinematics
 import cpgc.constraints.{Body, BodyRole, Topology}
 import cpgc.domain.*
 import cpgc.physics.Efficiency
-import cpgc.search.{Compounder, RoleSolver}
+import cpgc.search.RoleSolver
 import munit.FunSuite
 import scala.util.Random
 
@@ -16,16 +16,14 @@ class RoleKinematicsSpec extends FunSuite:
     * are fine. Returns `None` if the ratio formula is degenerate (e.g. `r12 = 0`
     * for the chosen tooth counts); the test caller skips those samples. */
   private def designOpt(mode: Mode, s1: GearSet, s2: Option[GearSet]): Option[CompoundDesign] =
-    val r: Option[Ratio] = mode match
-      case Mode.SingleStage => Some(Compounder.singleStageRatio(s1))
-      case _                => s2.flatMap(g => RoleSolver.ratio(Topology.fromMode(mode), s1, Some(g)))
-    r.map { ratio =>
+    val topology = Topology.fromMode(mode)
+    RoleSolver.ratio(topology, s1, s2).map { ratio =>
       CompoundDesign(
         stage1     = Stage(s1, Module(1.0)),
         stage2     = s2.map(g => Stage(g, Module(1.0))),
-        mode       = mode,
+        topology   = topology,
         ratio      = ratio,
-        efficiency = Efficiency.overall(s1, s2, mode),
+        efficiency = Efficiency.overall(topology),
         spacingOk  = true,
         profileShiftHint = None
       )
@@ -186,6 +184,6 @@ class RoleKinematicsSpec extends FunSuite:
     ).flatten
     designs.foreach { d =>
       val (in, _) = Kinematics.io(d, Kinematics.at(d, phi))
-      assertEqualsDouble(in, phi, 1e-12, s"io input for ${d.mode}")
+      assertEqualsDouble(in, phi, 1e-12, s"io input for ${d.modeName}")
     }
   }
