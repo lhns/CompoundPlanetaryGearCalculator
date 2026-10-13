@@ -76,7 +76,3 @@ object Scorer:
           acc.offer(e, key, Scored(t, e, d))
       }
       accs.map((t, acc) => t -> acc.result).toMap
-
-  /** Rank a fully materialized list (used when no targets supplied). */
-  def rankByRatio(designs: Iterable[CompoundDesign]): Vector[CompoundDesign] =
-    designs.toVector.sortBy(_.ratio.value)
