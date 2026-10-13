@@ -4,6 +4,10 @@ import cpgc.constraints.{Body, BodyRole, Coupling, SearchConfig, Topology}
 import cpgc.search.Scorer.SortBy
 import cpgc.web.UiLogic.parseFinite
 
+/** Which view the schematic panel shows. */
+enum View:
+  case Schematic, ThreeD
+
 // URL query handling: parse the address-bar state into the form, and mirror the form back.
 object UrlState:
 
@@ -110,6 +114,10 @@ object UrlState:
   def initialSort(query: String): SortBy =
     urlParam(query, "sort").flatMap(SortBy.parse).getOrElse(SortBy.BestFit)
 
+  /** `?view=3d` selects the 3D view; anything else is the 2D schematic. */
+  def initialView(query: String): View =
+    if urlParam(query, "view").exists(_.trim.equalsIgnoreCase("3d")) then View.ThreeD else View.Schematic
+
   /** Initial form values from a query string:
     *   ?sun=10-40&planet=10-18&ring=40-120&planets=3-4&od=150&minmod=0.5&target=53.12
     *   &ringwall=2&clearance=0.5&phased=1
@@ -140,8 +148,8 @@ object UrlState:
     if d == math.rint(d) && math.abs(d) < 1e15 then d.toLong.toString else d.toString
 
   /** Query string (without `?`) that `initialForm` / `initialTopology` /
-    * `initialSort` read back to the same state: the URL mirrors the page. */
-  def toQuery(f: FormValues, sort: SortBy): String =
+    * `initialSort` / `initialView` read back to the same state: the URL mirrors the page. */
+  def toQuery(f: FormValues, sort: SortBy, view: View = View.Schematic): String =
     val t = f.topology
     val topo: Vector[(String, String)] =
       t.legacyMode match
@@ -167,5 +175,6 @@ object UrlState:
       "target" -> f.target,
       "spfact" -> f.sunPlanetFactor,
       "sort" -> sort.toString.toLowerCase
-    ) ++ (if f.phasedPinions then Vector("phased" -> "1") else Vector.empty)
+    ) ++ (if f.phasedPinions then Vector("phased" -> "1") else Vector.empty) ++
+      (if view == View.ThreeD then Vector("view" -> "3d") else Vector.empty)
     (topo ++ rest).map((k, v) => s"$k=${percentEncode(v)}").mkString("&")

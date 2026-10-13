@@ -253,3 +253,93 @@ object SchematicLayout:
 
     sb ++= "Z"
     sb.toString
+
+  // ── Tooth outlines as point lists (3D view) ───────────────────────────────
+  //
+  // The same involute outlines as `externalGearPath` / `internalGearPath`, as
+  // closed point lists (first point not repeated) about the origin, in the
+  // schematic's y-down convention. `SchematicLayoutSpec` checks that they match
+  // the paths vertex for vertex.
+
+  /** Outline of an external involute gear (sun, planet) about the origin. */
+  def externalGearPoints(teeth: Int, modulePx: Double, rotateRad: Double): Vector[(Double, Double)] =
+    val r          = coreGearRadii(teeth, modulePx, internal = false)
+    val toothPitch = 2.0 * math.Pi / teeth
+    val deltaBase  = math.Pi / (2.0 * teeth) + inv(PressureAngleRad)
+    def alphaAt(rr: Double): Double = if rr <= r.base then 0.0 else math.acos(r.base / rr)
+
+    val out = Vector.newBuilder[(Double, Double)]
+    def addPolar(rr: Double, theta: Double): Unit = out += ((rr * math.cos(theta), rr * math.sin(theta)))
+
+    val rFlankStart = math.max(r.base, r.root)
+    val flankSpan   = r.outer - rFlankStart
+    var k = 0
+    while k < teeth do
+      val thetaC = k * toothPitch + rotateRad
+      var s = 0
+      while s < FlankSamples do
+        val rr = rFlankStart + (s.toDouble / (FlankSamples - 1)) * flankSpan
+        addPolar(rr, thetaC + deltaBase - inv(alphaAt(rr)))
+        s += 1
+      val alphaA        = alphaAt(r.outer)
+      val thetaRightTop = thetaC + deltaBase - inv(alphaA)
+      val thetaLeftTop  = thetaC - deltaBase + inv(alphaA)
+      s = 1
+      while s <= TipSamples do
+        addPolar(r.outer, thetaRightTop + (s.toDouble / (TipSamples + 1)) * (thetaLeftTop - thetaRightTop))
+        s += 1
+      s = 0
+      while s < FlankSamples do
+        val rr = rFlankStart + (1.0 - s.toDouble / (FlankSamples - 1)) * flankSpan
+        addPolar(rr, thetaC - deltaBase + inv(alphaAt(rr)))
+        s += 1
+      val thetaLeftBase = thetaC - deltaBase
+      if r.root < r.base then addPolar(r.root, thetaLeftBase)
+      val thetaNextRightBase = thetaC + toothPitch + deltaBase
+      s = 1
+      while s < TroughSamples do
+        addPolar(r.root, thetaLeftBase + (s.toDouble / TroughSamples) * (thetaNextRightBase - thetaLeftBase))
+        s += 1
+      if r.root < r.base then addPolar(r.root, thetaNextRightBase)
+      k += 1
+    out.result()
+
+  /** Outline of an internal involute ring gear's tooth side (teeth point inward) about the origin. */
+  def internalGearPoints(teeth: Int, modulePx: Double, rotateRad: Double): Vector[(Double, Double)] =
+    val r          = coreGearRadii(teeth, modulePx, internal = true)
+    val toothPitch = 2.0 * math.Pi / teeth
+    val deltaPitch = math.Pi / (2.0 * teeth)
+    val invP       = inv(PressureAngleRad)
+    val rTip       = r.outer
+    val rRoot      = r.root
+    val rFlankLo   = math.max(r.base, rTip)
+    def alphaAt(rr: Double): Double = if rr <= r.base then 0.0 else math.acos(r.base / rr)
+    def thetaRight(thetaC: Double, rr: Double): Double = thetaC + deltaPitch + (inv(alphaAt(rr)) - invP)
+    def thetaLeft(thetaC: Double, rr: Double): Double  = thetaC - deltaPitch - (inv(alphaAt(rr)) - invP)
+
+    val out = Vector.newBuilder[(Double, Double)]
+    def addPolar(rr: Double, theta: Double): Unit = out += ((rr * math.cos(theta), rr * math.sin(theta)))
+
+    var k = 0
+    while k < teeth do
+      val thetaC = k * toothPitch + rotateRad
+      addPolar(rTip, thetaC)
+      var s = 0
+      while s <= FlankSamples do
+        val rr = rFlankLo + (s.toDouble / FlankSamples) * (rRoot - rFlankLo)
+        addPolar(rr, thetaRight(thetaC, rr))
+        s += 1
+      val thetaRightRoot    = thetaRight(thetaC, rRoot)
+      val thetaNextLeftRoot = thetaLeft(thetaC + toothPitch, rRoot)
+      s = 1
+      while s < TroughSamples do
+        addPolar(rRoot, thetaRightRoot + (s.toDouble / TroughSamples) * (thetaNextLeftRoot - thetaRightRoot))
+        s += 1
+      val thetaNextC = thetaC + toothPitch
+      s = 0
+      while s <= FlankSamples do
+        val rr = rFlankLo + (1.0 - s.toDouble / FlankSamples) * (rRoot - rFlankLo)
+        addPolar(rr, thetaLeft(thetaNextC, rr))
+        s += 1
+      k += 1
+    out.result()

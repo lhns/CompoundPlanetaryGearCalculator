@@ -56,6 +56,7 @@ lazy val webDistDev = taskKey[File]("Unoptimized (fast link) static site in web/
 def copySite(linked: File, resources: File, out: File): File = {
   IO.copyFile(linked / "main.js", out / "main.js")
   IO.copyFile(resources / "index.html", out / "index.html")
+  IO.copyDirectory(resources / "vendor", out / "vendor") // vendored three.js, a classic global script (ADR 0019)
   out
 }
 

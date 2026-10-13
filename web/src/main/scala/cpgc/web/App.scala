@@ -5,6 +5,7 @@ import cpgc.constraints.{SearchConfig, Topology}
 import cpgc.domain.CompoundDesign
 import cpgc.search.Scorer.SortBy
 import cpgc.web.UiKit.*
+import com.raquo.laminar.nodes.ChildNode
 import org.scalajs.dom
 import scala.scalajs.js
 
@@ -25,10 +26,10 @@ object App:
   private val PlanetsRange = (2, 8)
 
   /** Mirror the page state into the address bar so the URL round-trips. */
-  private def writeUrl(f: FormValues, sort: SortBy): Unit =
+  private def writeUrl(f: FormValues, sort: SortBy, view: View): Unit =
     try
       val extra = if query.contains("pause") then "&pause" else ""
-      dom.window.history.replaceState(null, "", "?" + UrlState.toQuery(f, sort) + extra)
+      dom.window.history.replaceState(null, "", "?" + UrlState.toQuery(f, sort, view) + extra)
     catch case _: Throwable => () // e.g. sandboxed file:// pages
 
   private def root(): HtmlElement =
@@ -53,6 +54,7 @@ object App:
     val ringWallVar   = Var(form0.ringWall)
     val clearanceVar  = Var(form0.clearance)
     val sortByVar     = Var[SortBy](UrlState.initialSort(query))
+    val viewVar       = Var[View](UrlState.initialView(query))
 
     val resultsVar     = Var(Vector.empty[CompoundDesign])
     val selectedVar    = Var(Option.empty[CompoundDesign])
@@ -75,8 +77,9 @@ object App:
 
     val runner = SearchRunner(
       () => formNow(), sortByVar, resultsVar, selectedVar, statusVar, errorVar,
-      searchState, searchProgress, searchProgressFraction, writeUrl
+      searchState, searchProgress, searchProgressFraction, (f, sort) => writeUrl(f, sort, viewVar.now())
     )
+    viewVar.signal.changes.foreach(v => writeUrl(formNow(), sortByVar.now(), v))(unsafeWindowOwner)
 
     js.timers.setTimeout(50)(runner.runSearch())
 
@@ -165,6 +168,7 @@ object App:
         div(cls := "panel schematic-panel",
           div(cls := "panel-header",
             span(cls := "panel-title", "Schematic"),
+            ThreeView.toggle(viewVar),
             div(cls := "controls",
               label(cls := "speed-label", forId := "speed-input", "speed"),
               input(
@@ -193,7 +197,13 @@ object App:
               case None    => ""
             }
           ),
-          div(cls := "schematic", Schematic(selectedVar.signal, animator.phase, searchState.signal, searchProgress.signal, searchProgressFraction.signal))
+          div(cls := "schematic",
+            child <-- viewVar.signal.map[ChildNode.Base] {
+              case View.Schematic =>
+                Schematic(selectedVar.signal, animator.phase, searchState.signal, searchProgress.signal, searchProgressFraction.signal)
+              case View.ThreeD =>
+                ThreeView(selectedVar.signal, animator.phase, searchState.signal, searchProgress.signal)
+            })
         )
       ),
       // ── Bottom: results table + export bar ──────────────────────────
