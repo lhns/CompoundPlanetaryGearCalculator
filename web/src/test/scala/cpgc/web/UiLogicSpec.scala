@@ -2,13 +2,15 @@ package cpgc.web
 
 import cpgc.Calculator
 import cpgc.constraints.{Body, BodyRole, Coupling, SearchConfig, Topology}
-import cpgc.domain.{GearSet, Mode, Teeth}
+import cpgc.domain.{GearSet, Teeth}
+import cpgc.kinematics.Kinematics
+import cpgc.search.Scorer.SortBy
 import cpgc.search.Compounder
 import munit.FunSuite
 import scala.util.Try
 
 /** Pure UI logic tests (no DOM). Tests tagged U1..U7 / N* pin down known UI
-  * bugs; those still failing in production are marked `.fail` with the
+  * bugs; those still failing in production would be marked `.fail` with the
   * observed wrong value, so they flip to red the moment the bug is fixed and
   * the marker must be removed. */
 class UiLogicSpec extends FunSuite:
@@ -30,10 +32,7 @@ class UiLogicSpec extends FunSuite:
   /** Build the config (whatever the builder returns now or later: config or
     * `Right(config)`) and run the whole search over it. */
   private def buildAndSearch(f: FormValues): Unit =
-    (buildConfig(f, 50): Any) match
-      case c: SearchConfig        => Calculator.searchSteps(c).foreach(_ => ())
-      case Right(c: SearchConfig) => Calculator.searchSteps(c).foreach(_ => ())
-      case _                      => ()
+    buildConfig(f, 50).foreach(c => Calculator.searchSteps(c).foreach(_ => ()))
 
   // ── parseDouble / urlParam / parseRange ────────────────────────────────────
 
@@ -72,19 +71,19 @@ class UiLogicSpec extends FunSuite:
     val t = initialTopology("?input=C1&output=R2&fixed=S1")
     assertEquals(pins(t), (Body.C1, Body.R2, Body.S1))
 
-  test("U5a initialTopology matches mode= only as a whole parameter".fail):
+  test("U5a initialTopology matches mode= only as a whole parameter"):
     // observed: Topology.cdcpCompound (substring `contains("mode=cdcp")` matches `xmode=cdcp`)
     assertEquals(initialTopology("?xmode=cdcp"), Topology.standardCompound)
 
-  test("U5b urlParam percent-decodes values".fail):
+  test("U5b urlParam percent-decodes values"):
     // observed: Some("53%2C12")
     assertEquals(urlParam("?target=53%2C12", "target"), Some("53,12"))
 
-  test("U5c parseRange accepts a single value as a degenerate range".fail):
+  test("U5c parseRange accepts a single value as a degenerate range"):
     // observed: None
     assertEquals(parseRange("3"), Some((3, 3)))
 
-  test("U5d ?planets=3 sets both planets bounds to 3".fail):
+  test("U5d ?planets=3 sets both planets bounds to 3"):
     // observed: (3,4) defaults, the single value is ignored
     val f = initialForm("?planets=3")
     assertEquals((f.planetsMin, f.planetsMax), (3, 3))
@@ -100,34 +99,38 @@ class UiLogicSpec extends FunSuite:
     val b = bounds(40, 10)
     assertEquals((b.min, b.max), (10, 40))
 
+  private def cfgOf(f: FormValues, k: Int = 1): SearchConfig =
+    buildConfig(f, k).fold(e => fail(s"expected a config, got: $e"), identity)
+
   test("buildConfig copies form values and the topology"):
-    val c = buildConfig(base.copy(target = "100", sunPlanetFactor = "2"), 77)
+    val c = cfgOf(base.copy(target = "100", sunPlanetFactor = "2"), 77)
     assertEquals(c.topology, Topology.cdcpCompound)
     assertEquals((c.sunTeeth.min, c.sunTeeth.max), (10, 12))
     assertEquals(c.sunPlanetFactor, 2.0)
     assertEquals(c.topPerTarget, 77)
     assertEquals(c.targets.map(_.value), Seq(100.0))
 
-  test("buildConfig: blank / junk sunPlanetFactor means unlimited, a novel topology is passed through"):
-    assertEquals(buildConfig(base, 1).sunPlanetFactor, 1e9)
-    assertEquals(buildConfig(base.copy(sunPlanetFactor = "x"), 1).sunPlanetFactor, 1e9)
-    assertEquals(buildConfig(base.copy(topology = ravigneauxTopology), 1).topology, ravigneauxTopology)
+  test("buildConfig: blank sunPlanetFactor means unlimited, junk is an error, a novel topology is passed through"):
+    assertEquals(cfgOf(base).sunPlanetFactor, 1e9)
+    assert(buildConfig(base.copy(sunPlanetFactor = "x"), 1).isLeft)
+    assert(buildConfig(base.copy(sunPlanetFactor = "0"), 1).isLeft)
+    assertEquals(cfgOf(base.copy(topology = ravigneauxTopology)).topology, ravigneauxTopology)
 
-  test("U2 typed teeth minimum below 2 must not throw while building the config".fail):
-    // observed: IllegalArgumentException "min teeth must be >= 2, got 1"
-    assert(Try(buildConfig(base.copy(sunMin = 1), 50)).isSuccess)
+  test("buildConfig passes ring wall, clearance and phased pinions through"):
+    val c = cfgOf(base.copy(ringWall = 3.0, clearance = 0.8, phasedPinions = true))
+    assertEquals((c.ringWall, c.planetClearance, c.phasedPinions), (3.0, 0.8, true))
 
-  test("U2 zero / negative bounds must not throw".fail):
-    // observed: IllegalArgumentException from TeethBounds
-    assert(Try(buildConfig(base.copy(ringMin = -3, ringMax = 0), 50)).isSuccess)
+  test("U2 typed teeth minimum below 2 is an inline error, never a throw"):
+    assert(Try(buildConfig(base.copy(sunMin = 1), 50)).toOption.exists(_.isLeft))
 
-  test("U2 URL ?sun=1-5 must not throw while building the config".fail):
-    // observed: IllegalArgumentException "min teeth must be >= 2, got 1"
-    assert(Try(buildConfig(initialForm("?sun=1-5"), 50)).isSuccess)
+  test("U2 zero / negative bounds are an error, never a throw"):
+    assert(Try(buildConfig(base.copy(ringMin = -3, ringMax = 0), 50)).toOption.exists(_.isLeft))
 
-  test("U2 planets minimum 1 must not throw".fail):
-    // observed: IllegalArgumentException from TeethBounds
-    assert(Try(buildConfig(base.copy(planetsMin = 1, planetsMax = 4), 50)).isSuccess)
+  test("U2 URL ?sun=1-5 is an error, never a throw"):
+    assert(Try(buildConfig(initialForm("?sun=1-5"), 50)).toOption.exists(_.isLeft))
+
+  test("U2 planets minimum 1 is an error, never a throw"):
+    assert(Try(buildConfig(base.copy(planetsMin = 1, planetsMax = 4), 50)).toOption.exists(_.isLeft))
 
   // ── U3: target parsing ─────────────────────────────────────────────────────
   // Rule under test: ';' or whitespace separates targets; a comma between
@@ -143,19 +146,19 @@ class UiLogicSpec extends FunSuite:
   test("parseTargets: multiple targets separated by comma + space"):
     assertEquals(targets("100, 53.12"), Seq(100.0, 53.12))
 
-  test("U3 a lone comma between digits is a decimal comma".fail):
+  test("U3 a lone comma between digits is a decimal comma"):
     // observed: List(53.0, 12.0)
     assertEquals(targets("53,12"), Seq(53.12))
 
-  test("U3 ';' separates targets".fail):
+  test("U3 ';' separates targets"):
     // observed: List() (whole string fails to parse)
     assertEquals(targets("100;53,12"), Seq(100.0, 53.12))
 
-  test("U3 whitespace separates targets".fail):
+  test("U3 whitespace separates targets"):
     // observed: List() ("100 53.12" fails to parse)
     assertEquals(targets("100 53.12"), Seq(100.0, 53.12))
 
-  test("U3 non-finite targets never throw and are dropped".fail):
+  test("U3 non-finite targets never throw and are dropped"):
     // observed: IllegalArgumentException "Ratio must be finite, got NaN" (also Infinity, 1e999)
     for s <- Seq("NaN", "Infinity", "-Infinity", "1e999", "100, 1e999") do
       val r = Try(parseTargets(s))
@@ -179,6 +182,12 @@ class UiLogicSpec extends FunSuite:
   test("preset <-> topology round-trips for every non-Custom preset"):
     for p <- GearboxPreset.values if p != GearboxPreset.Custom do
       assertEquals(topologyPreset(presetTopology(p)), p)
+
+  test("the preset list has CDCP (sun-less) and no selectable Custom"):
+    assertEquals(presetTopology(GearboxPreset.SunlessCdcp), Topology.sunlessCdcpCompound)
+    assert(selectablePresets.contains(GearboxPreset.SunlessCdcp))
+    assert(!selectablePresets.contains(GearboxPreset.Custom))
+    assertEquals(topologyPreset(Topology.sunlessCdcpCompound), GearboxPreset.SunlessCdcp)
 
   test("an edited preset topology is Custom"):
     assertEquals(topologyPreset(Topology.standardCompound.copy(secondCoupling = Coupling.SunToSun)), GearboxPreset.Custom)
@@ -208,7 +217,7 @@ class UiLogicSpec extends FunSuite:
   test("N1 assignRole on an Absent body must not throw"):
     assert(Try(assignRole(Topology.nssCompound, Body.S2, BodyRole.Input)).isSuccess)
 
-  test("N1 assignRole on a body that does not exist must not throw".fail):
+  test("N1 assignRole on a body that does not exist must not throw"):
     // observed: NoSuchElementException: key not found: R2
     assert(Try(assignRole(Topology.singleStage, Body.R2, BodyRole.Input)).isSuccess)
 
@@ -232,11 +241,38 @@ class UiLogicSpec extends FunSuite:
     assert(!t.s2Present)
     assertEquals(t.input, Body.C1)
 
-  test("U1 toggling S2 off when C2 holds a pin role yields a valid topology".fail):
-    // observed: IllegalArgumentException (C2 Output survives into NSS)
-    val t = setS2Present(ravigneauxTopology, false)
+  test("U1 a sun welded by a coupling cannot be removed: Left with a reason, topology unchanged"):
+    // Ravigneaux welds C1 to S2, so S2 cannot be absent (the old expectation of a valid NSS was wrong).
+    val r = setSunPresent(ravigneauxTopology, 2, false)
+    assert(r.isLeft, r.toString)
+    assert(r.left.exists(_.contains("Absent")), r.toString)
+    assertEquals(setS2Present(ravigneauxTopology, false), ravigneauxTopology)
+    assert(sunToggleDisabledReason(ravigneauxTopology, 2).isDefined)
+
+  test("U1 toggling S2 off when C2 holds a pin role is valid and keeps the pins"):
+    val t0 = assignRole(Topology.standardCompound, Body.C2, BodyRole.Output)
+    val t  = setSunPresent(t0, 2, false).fold(e => fail(e), identity)
     assert(!t.s2Present)
-    assertEquals((t.input, t.fixed), (Body.S1, Body.R1))
+    assertEquals(pins(t), pins(t0))
+
+  test("sun toggles: stage 1 sun removal moves the Input pin to a free body"):
+    val t = setSunPresent(Topology.standardCompound, 1, false).fold(e => fail(e), identity)
+    assert(!t.s1Present && t.s2Present)
+    assertEquals(t.input, Body.C1)
+    assertEquals(t.fixed, Body.R1)
+
+  test("sun toggles: both suns absent from CDCP is the sun-less CDCP"):
+    val t = setSunPresent(Topology.cdcpCompound, 1, false).flatMap(setSunPresent(_, 2, false))
+    assertEquals(t, Right(Topology.sunlessCdcpCompound))
+    assertEquals(setSunPresent(Topology.sunlessCdcpCompound, 1, true).flatMap(setSunPresent(_, 2, true)), Right(Topology.cdcpCompound))
+
+  test("sun toggles: no free body means a reason, not a throw"):
+    // single stage: S1 in, C1 out, R1 fixed: no free body at all
+    assert(setSunPresent(Topology.singleStage, 1, false).isLeft)
+    assert(sunToggleDisabledReason(Topology.singleStage, 1).isDefined)
+    assert(sunToggleDisabledReason(Topology.singleStage, 2).isDefined)
+    assert(sunToggleDisabledReason(Topology.standardCompound, 2).isEmpty)
+    assert(sunToggleDisabledReason(Topology.nssCompound, 2).isEmpty) // absent: can always come back
 
   test("U1 toggling S2 off when S2 holds a pin role yields a valid topology"):
     val withS2Input = assignRole(Topology.standardCompound, Body.S2, BodyRole.Input)
@@ -251,19 +287,22 @@ class UiLogicSpec extends FunSuite:
 
   // ── U6: NSS ignores couplings ──────────────────────────────────────────────
 
-  test("U6 coupling selectors are disabled for NSS".fail):
-    // observed: false (only `stages != 2` is checked)
-    assert(couplingSelectorsDisabled(Topology.nssCompound))
+  test("U6 coupling selectors stay enabled for NSS (couplings matter there, ADR 0015)"):
+    assert(!couplingSelectorsDisabled(Topology.nssCompound))
+    assert(!couplingSelectorsDisabled(Topology.sunlessCdcpCompound))
 
   test("coupling selectors are disabled for single stage, enabled for a full compound"):
     assert(couplingSelectorsDisabled(Topology.singleStage))
     assert(!couplingSelectorsDisabled(Topology.standardCompound))
 
-  test("U6 changing a coupling in NSS is a no-op".fail):
-    // observed: a Custom topology with firstCoupling = RingToSun that RoleSolver ignores
-    for slot <- CouplingSlot.values do
-      val c = if slot == CouplingSlot.First then Coupling.RingToSun else Coupling.RingToRing
-      assertEquals(setCoupling(Topology.nssCompound, slot, c), Topology.nssCompound)
+  test("U6 changing a coupling in NSS changes the topology, except welds on the absent sun"):
+    val t = setCoupling(Topology.nssCompound, CouplingSlot.First, Coupling.CarrierToRing)
+    assertNotEquals(t, Topology.nssCompound)
+    assertEquals(t.firstCoupling, Coupling.CarrierToRing)
+    // Sun 2 does not exist: the weld "Ring 1 <-> Sun 2" is greyed out and refused
+    assert(couplingOptionDisabled(Topology.nssCompound, CouplingSlot.First, Coupling.RingToSun))
+    assertEquals(setCoupling(Topology.nssCompound, CouplingSlot.First, Coupling.RingToSun), Topology.nssCompound)
+    assert(!couplingOptionDisabled(Topology.nssCompound, CouplingSlot.First, Coupling.CarrierToRing))
 
   // ── U7: PlanetStack needs CarrierToCarrier ─────────────────────────────────
 
@@ -273,12 +312,12 @@ class UiLogicSpec extends FunSuite:
       (t.secondCoupling == Coupling.PlanetStack && t.firstCoupling != Coupling.CarrierToCarrier)
     )
 
-  test("U7 moving Coupling 1 away from CarrierToCarrier must not leave Coupling 2 = PlanetStack".fail):
+  test("U7 moving Coupling 1 away from CarrierToCarrier must not leave Coupling 2 = PlanetStack"):
     // observed: Topology(firstCoupling = RingToSun, secondCoupling = PlanetStack), a non-buildable pair
     val t = setCoupling(Topology.standardCompound, CouplingSlot.First, Coupling.RingToSun)
     assert(!stackedWithoutSharedCarrier(t), s"got ${t.firstCoupling} / ${t.secondCoupling}")
 
-  test("U7 moving Coupling 2 away from CarrierToCarrier must not leave Coupling 1 = PlanetStack".fail):
+  test("U7 moving Coupling 2 away from CarrierToCarrier must not leave Coupling 1 = PlanetStack"):
     // observed: Topology(firstCoupling = PlanetStack, secondCoupling = RingToSun)
     val start = Topology.standardCompound.copy(firstCoupling = Coupling.PlanetStack, secondCoupling = Coupling.CarrierToCarrier)
     val t = setCoupling(start, CouplingSlot.Second, Coupling.RingToSun)
@@ -317,3 +356,151 @@ class UiLogicSpec extends FunSuite:
     val d1 = d.getOrElse(fail("expected a design"))
     val expectedM2 = d1.stage1.module.value * (20.0 + 10.0) / (30.0 + 12.0)
     assertEqualsDouble(d1.stage2.get.module.value, expectedM2, 1e-9)
+
+  // ── U7 (auto-deselect) ─────────────────────────────────────────────────────
+
+  test("U7 choosing another partner for PlanetStack deselects it: the displaced shared carrier takes its place"):
+    val t = setCoupling(Topology.standardCompound, CouplingSlot.First, Coupling.RingToSun)
+    assertEquals((t.firstCoupling, t.secondCoupling), (Coupling.RingToSun, Coupling.CarrierToCarrier))
+    assert(!t.stacked)
+    val t2 = setCoupling(Topology.standardCompound.copy(firstCoupling = Coupling.PlanetStack, secondCoupling = Coupling.CarrierToCarrier),
+                         CouplingSlot.Second, Coupling.RingToSun)
+    assertEquals((t2.firstCoupling, t2.secondCoupling), (Coupling.CarrierToCarrier, Coupling.RingToSun))
+
+  test("PlanetStack is only selectable next to CarrierToCarrier; every reachable pair is buildable"):
+    for
+      p <- selectablePresets if presetTopology(p).stages == 2
+      slot <- CouplingSlot.values
+      c <- Coupling.values
+    do
+      val t = presetTopology(p)
+      val r = trySetCoupling(t, slot, c)
+      assertEquals(couplingOptionDisabled(t, slot, c), r.isLeft)
+      r.foreach { t2 =>
+        assert(!t2.stacked || Set(t2.firstCoupling, t2.secondCoupling).contains(Coupling.CarrierToCarrier), s"$p $slot $c")
+      }
+
+  // ── URL round trip (U5) ────────────────────────────────────────────────────
+
+  test("urlParam: exact names, first occurrence, percent-decoding and '+'"):
+    assertEquals(urlParam("?xtarget=1&target=2", "target"), Some("2"))
+    assertEquals(urlParam("?target=1&target=2", "target"), Some("1"))
+    assertEquals(urlParam("?target=100%3B53%2C12", "target"), Some("100;53,12"))
+    assertEquals(urlParam("?t=a+b%20c%E2%82%AC", "t"), Some("a b c€"))
+    assertEquals(urlParam("?t=100%", "t"), Some("100%"))
+
+  test("percentEncode / percentDecode round-trip"):
+    for s <- Seq("", "53,12", "100; 53.12", "a&b=c#d", "€ ü", "50%") do
+      assertEquals(percentDecode(percentEncode(s)), s)
+
+  test("parseRange: single value, negatives, junk"):
+    assertEquals(parseRange("3"), Some((3, 3)))
+    assertEquals(parseRange("-3-0"), Some((-3, 0)))
+    assertEquals(parseRange(""), None)
+
+  private val roundTripForms = Seq(
+    initialForm(""),
+    initialForm("?sun=1-5&planets=3&od=0&target=100%3B53%2C12"),
+    initialForm("?mode=cdcp-sunless&ringwall=3.5&clearance=0.25&phased=1&spfact=2"),
+    base,
+    base.copy(topology = ravigneauxTopology, target = "100, 53.12", sunPlanetFactor = "1.5"),
+    base.copy(topology = simpsonTopology, ringWall = 0.0, clearance = 1.25, phasedPinions = true),
+    base.copy(topology = Topology.nssCompound.copy(firstCoupling = Coupling.CarrierToRing, secondCoupling = Coupling.CarrierToCarrier)),
+    base.copy(topology = Topology.singleStage),
+    base.copy(topology = setSunPresent(Topology.standardCompound, 1, false).toOption.get)
+  )
+
+  test("toQuery -> initialForm round-trips the whole form, topology included"):
+    for f <- roundTripForms; sort <- SortBy.values.toSeq do
+      val q = toQuery(f, sort)
+      assertEquals(initialForm(q), f, q)
+      assertEquals(initialSort(q), sort)
+
+  test("every preset round-trips through the URL"):
+    for p <- selectablePresets do
+      val f = base.copy(topology = presetTopology(p))
+      assertEquals(initialForm(toQuery(f, SortBy.Ratio)).topology, presetTopology(p), p.toString)
+
+  test("URL absent / roles / couplings params build the topology"):
+    assertEquals(initialTopology("?mode=cdcp&absent=S1,S2"), Topology.sunlessCdcpCompound)
+    assertEquals(initialTopology("?mode=nss&absent="), Topology.standardCompound)
+    // illegal combinations are skipped, not fatal
+    assertEquals(initialTopology("?mode=nss&coupling1=RingToSun"), Topology.nssCompound)
+    assertEquals(initialTopology("?absent=R1"), Topology.standardCompound)
+
+  test("single-value ranges, od=0 and sun=1-5 come through the URL and fail validation inline"):
+    assert(buildConfig(initialForm("?od=0"), 5).isLeft)
+    assert(buildConfig(initialForm("?sun=1-5"), 5).isLeft)
+    assert(buildConfig(initialForm("?planets=3"), 5).isRight)
+
+  // ── Targets and numbers ────────────────────────────────────────────────────
+
+  test("targets: comma + space is two targets, comma between digits is decimal, ';' and spaces separate"):
+    assertEquals(targets("100, 53.12"), Seq(100.0, 53.12))
+    assertEquals(targets("100,53.12"), Seq.empty[Double]) // "100.53.12" is not a number: dropped with a hint
+    assertEquals(targets("100,5"), Seq(100.5))
+    assertEquals(targets("100;53,12; 7"), Seq(100.0, 53.12, 7.0))
+    assertEquals(targets("100,"), Seq(100.0))
+
+  test("targets: junk and non-finite are dropped with a hint"):
+    assertEquals(targets("abc 5 1e999 NaN"), Seq(5.0))
+    assert(targetHint("abc 5").exists(_.contains("abc")))
+    assertEquals(targetHint("5; 7"), None)
+
+  test("parseDouble: strict decimal syntax"):
+    assertEquals(parseDouble("0."), Some(0.0))
+    assertEquals(parseDouble(".5"), Some(0.5))
+    assertEquals(parseDouble("1e3"), Some(1000.0))
+    assertEquals(parseDouble("1,000.5"), None)
+    assertEquals(parseDouble("1d"), None)
+    assertEquals(parseDouble("0x10"), None)
+    assertEquals(parseFinite("1e999"), None)
+
+  test("U10 typing '0.' does not rewrite the field; an external change does"):
+    assert(!shouldRewrite("0.", 0.0))
+    assert(!shouldRewrite("150.", 150.0))
+    assert(shouldRewrite("150.", 120.0))
+    assert(shouldRewrite("", 150.0))
+    assert(!shouldRewrite(" 12 ", 12))
+    assert(shouldRewrite("1x", 1))
+
+  // ── Search bookkeeping ─────────────────────────────────────────────────────
+
+  test("re-rank without searching only for a finished, untruncated, complete run"):
+    assert(rerankable(done = true, truncated = false, found = 100, k = 10000))
+    assert(!rerankable(done = true, truncated = false, found = 20000, k = 10000))
+    assert(!rerankable(done = false, truncated = true, found = 100, k = 10000))
+    assert(!rerankable(done = false, truncated = false, found = 100, k = 10000))
+
+  test("default sort is labelled by what it does: no target means lowest ratio"):
+    assertEquals(sortLabel(SortBy.BestFit, hasTargets = true), "Best fit")
+    assertNotEquals(sortLabel(SortBy.BestFit, hasTargets = false), "Best fit")
+    assert(sortTooltip(SortBy.BestFit, hasTargets = false).contains("ratio"))
+
+  test("engine run to completion: re-ranking its top by another criterion equals a fresh engine for that criterion"):
+    val c = cfgOf(base.copy(planetMax = 12, ringMax = 36), 10000)
+    val e = Calculator.engine(c, SortBy.BestFit, 10000).run()
+    assert(e.found > 0 && e.found <= 10000 && !e.truncated)
+    for by <- Seq(SortBy.Ratio, SortBy.Efficiency, SortBy.Simplicity) do
+      val re    = cpgc.search.Scorer.sort(e.top, by, c.targets)
+      val fresh = Calculator.engine(c, by, 10000).run().top
+      assertEquals(re.map(cpgc.search.Scorer.canonicalKey).toSet, fresh.map(cpgc.search.Scorer.canonicalKey).toSet)
+      assertEquals(re.size, fresh.size)
+
+  test("fmtEfficiency prints a percentage"):
+    assertEquals(fmtEfficiency(0.9406), "94.1%")
+
+  // ── Animation consistency for every preset (U8) ────────────────────────────
+
+  test("U8 the animation (Kinematics) matches the ratio for every preset's designs"):
+    val f = base.copy(sunMin = 10, sunMax = 20, planetMin = 10, planetMax = 16, ringMin = 30, ringMax = 60, planetsMin = 3, planetsMax = 4)
+    for p <- selectablePresets do
+      val t  = presetTopology(p)
+      val c  = cfgOf(f.copy(topology = t), 1)
+      val ds = Calculator.searchSteps(c).flatten.take(25).toVector
+      assert(ds.nonEmpty, s"no designs for $p")
+      for d <- ds do
+        val (in, out) = Kinematics.io(d, Kinematics.at(d, 1.0))
+        if math.abs(out) > 1e-9 then
+          assertEqualsDouble(in / out, d.ratio.value, 1e-6 * math.max(1.0, math.abs(d.ratio.value)), s"$p $d")
+        assertEquals(d.topology, t)

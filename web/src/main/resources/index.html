@@ -2,10 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <link rel="icon" href="data:," />
   <title>Compound Planetary Gear Calculator</title>
   <style>
     :root {
+      color-scheme: dark light;
       --bg: #0d1117;
+      --bg-top: #0b0f14;
+      --header-bg: rgba(22, 27, 34, 0.85);
       --panel: #161b22;
       --panel-2: #0e1116;
       --border: #30363d;
@@ -14,18 +20,68 @@
       --accent: #58a6ff;
       --accent-2: #7ee787;
       --row-sel: #1f6feb44;
+      --hover: #21262d;
+      --hover-soft: rgba(255,255,255,0.04);
+      --thumb-border: #0d1117;
+      --warn: #d29922;
+      --danger: #f85149;
+      --disabled: #6e7681;
+      --schematic-bg: #07090d;
+      --schematic-glow-1: rgba(88,166,255,0.06);
+      --schematic-glow-2: rgba(157,78,221,0.06);
+      --shadow: rgba(0,0,0,0.4);
+      /* schematic (read by the SVG) */
+      --svg-text: #e6e6e6;
+      --svg-sub: #a6accd;
+      --svg-hub: #0d1117;
+      --svg-track: #30363d;
+      --role-input: #7ee787;
+      --role-output: #58a6ff;
+      --role-fixed: #ff7b72;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f8fa;
+        --bg-top: #eef1f5;
+        --header-bg: rgba(255, 255, 255, 0.9);
+        --panel: #ffffff;
+        --panel-2: #f3f5f8;
+        --border: #d0d7de;
+        --text: #1f2328;
+        --muted: #59636e;
+        --accent: #0969da;
+        --accent-2: #1a7f37;
+        --row-sel: #0969da22;
+        --hover: #e6ebf1;
+        --hover-soft: rgba(0,0,0,0.04);
+        --thumb-border: #ffffff;
+        --warn: #9a6700;
+        --danger: #cf222e;
+        --disabled: #8c959f;
+        --schematic-bg: #fbfcfd;
+        --schematic-glow-1: rgba(9,105,218,0.05);
+        --schematic-glow-2: rgba(130,80,223,0.05);
+        --shadow: rgba(31,35,40,0.2);
+        --svg-text: #1f2328;
+        --svg-sub: #59636e;
+        --svg-hub: #ffffff;
+        --svg-track: #d0d7de;
+        --role-input: #1a7f37;
+        --role-output: #0969da;
+        --role-fixed: #cf222e;
+      }
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; height: 100%; }
     body {
       font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-      background: linear-gradient(180deg, #0b0f14, #0d1117 320px);
+      background: linear-gradient(180deg, var(--bg-top), var(--bg) 320px);
       color: var(--text);
       min-height: 100vh;
     }
     header {
       padding: 0.75rem 1.25rem;
-      background: rgba(22, 27, 34, 0.85);
+      background: var(--header-bg);
       backdrop-filter: blur(8px);
       border-bottom: 1px solid var(--border);
       display: flex; align-items: baseline; gap: 0.75rem;
@@ -39,6 +95,22 @@
     .app { padding: 1rem; max-width: 1400px; margin: 0 auto; display: grid; gap: 1rem; }
     .top-grid { display: grid; grid-template-columns: 320px 1fr; gap: 1rem; }
     @media (max-width: 900px) { .top-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 600px) {
+      header { padding: 0.6rem 0.75rem; flex-wrap: wrap; }
+      .app { padding: 0.5rem; gap: 0.6rem; }
+      .panel { padding: 0.75rem; }
+      .top-grid > * { min-width: 0; }
+      .schematic { min-height: 280px; padding: 0.25rem; }
+      .schematic svg { min-height: 260px; }
+      .schematic-panel .panel-header, .controls { flex-wrap: wrap; }
+      .results-panel .panel-header { padding: 0.75rem; }
+      .show-more-row { flex-wrap: wrap; padding: 0.6rem 0.75rem; }
+      .show-more-row > .panel-sub { white-space: normal; flex-basis: 100%; }
+      .show-more-right { margin-left: 0; }
+      .toast-stack { left: 0.5rem; right: 0.5rem; max-width: none; }
+      th, td { padding: 0.35rem 0.5rem; }
+      input, select { font-size: 16px; } /* no zoom-on-focus on phones */
+    }
 
     .panel {
       background: var(--panel);
@@ -59,6 +131,20 @@
     }
     input[type="number"] { font-variant-numeric: tabular-nums; }
     input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    /* Visible keyboard focus everywhere */
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    input[type="checkbox"]:focus-visible + .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
+    tr.row:focus-visible { outline-offset: -2px; }
+    /* Disabled controls */
+    select:disabled, input:disabled, button:disabled { opacity: 0.5; cursor: not-allowed; }
+    select:disabled:hover { border-color: var(--border); }
+    option:disabled { color: var(--disabled); }
+    input.invalid { border-color: var(--danger); }
+    .field-hint { font-size: 0.72rem; color: var(--muted); line-height: 1.35; min-height: 0; padding: 0.15rem 0; }
+    .field-hint:empty { display: none; }
+    .form-error { font-size: 0.8rem; color: var(--danger); margin-top: 0.7rem; line-height: 1.35; }
+    .form-error:empty { display: none; }
+    .hidden { display: none !important; }
     .range { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
 
     button.go {
@@ -79,7 +165,7 @@
       border: 1px solid var(--border); cursor: pointer; padding: 0; font-size: 0.85rem;
       display: inline-flex; align-items: center; justify-content: center;
     }
-    .iconbtn:hover { background: #21262d; }
+    .iconbtn:hover { background: var(--hover); }
     .speed-label {
       color: var(--muted); font-size: 0.75rem;
       display: inline-flex; align-items: center; height: 28px;
@@ -108,9 +194,11 @@
     .preset-select:focus { outline: 1px solid var(--accent); }
     /* Progressive-disclosure section (▸ Advanced …). */
     .advanced-section { margin: 0.6rem 0 0.3rem 0; }
-    .advanced-summary {
+    button.advanced-summary {
+      display: block; width: 100%; text-align: left;
       cursor: pointer; user-select: none;
-      color: var(--muted); font-size: 0.8rem;
+      color: var(--muted); font: inherit; font-size: 0.8rem;
+      background: transparent; border: 0; border-radius: 0;
       padding: 0.35rem 0; border-top: 1px dashed var(--border);
     }
     .advanced-summary:hover { color: var(--text); }
@@ -118,6 +206,7 @@
     .advanced-customized { color: var(--accent); font-style: italic; }
     .advanced-content { padding-left: 0.4rem; margin-bottom: 0.5rem; }
     .advanced-content.hidden { display: none; }
+    .range-inputs input.invalid { border-color: var(--danger); }
     .legacy-derived { font-size: 0.7rem; opacity: 0.7; margin-top: 0.3rem; }
     /* Transient toast notifications — fixed stack, top-right. */
     .toast-stack {
@@ -132,12 +221,12 @@
       border: 1px solid var(--border); border-left-width: 3px;
       border-radius: 6px; padding: 0.6rem 0.7rem;
       font-size: 0.82rem; line-height: 1.35;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      box-shadow: 0 4px 16px var(--shadow);
       animation: toast-in 0.18s ease-out;
     }
     @keyframes toast-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
-    .toast-error { border-left-color: #f85149; }
-    .toast-warn  { border-left-color: #d29922; }
+    .toast-error { border-left-color: var(--danger); }
+    .toast-warn  { border-left-color: var(--warn); }
     .toast-info  { border-left-color: var(--accent); }
     .toast-msg { flex: 1; min-width: 0; word-break: break-word; }
     .toast-dismiss {
@@ -156,9 +245,9 @@
     .schematic {
       flex: 1;
       background:
-        radial-gradient(circle at 30% 30%, rgba(88,166,255,0.06), transparent 60%),
-        radial-gradient(circle at 70% 70%, rgba(157,78,221,0.06), transparent 60%),
-        #07090d;
+        radial-gradient(circle at 30% 30%, var(--schematic-glow-1), transparent 60%),
+        radial-gradient(circle at 70% 70%, var(--schematic-glow-2), transparent 60%),
+        var(--schematic-bg);
       border: 1px solid var(--border); border-radius: 8px;
       min-height: 380px; padding: 0.5rem;
     }
@@ -172,10 +261,10 @@
     th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
     td.num, th:nth-child(-n+2), th:nth-child(8), th:nth-child(12) { text-align: right; font-family: ui-monospace, monospace; }
     tr.row { transition: background 0.08s linear; cursor: pointer; }
-    tr.row:hover { background: rgba(255,255,255,0.03); }
+    tr.row:hover { background: var(--hover-soft); }
     tr.row.sel { background: var(--row-sel); }
     th.col-warn, td.col-warn { width: 1.5em; padding-left: 0.4rem; padding-right: 0.3rem; text-align: center; }
-    .warn-glyph { color: #d29922; font-size: 0.9rem; cursor: help; }
+    .warn-glyph { color: var(--warn); font-size: 0.9rem; cursor: help; }
 
     .show-more-row {
       display: flex; justify-content: space-between; align-items: center;
@@ -232,7 +321,7 @@
       transition: background 0.1s linear, color 0.1s linear, box-shadow 0.1s linear;
     }
     .topology-segment > button:hover:not(:disabled):not(.active) {
-      color: var(--text); background: rgba(255,255,255,0.04);
+      color: var(--text); background: var(--hover-soft);
     }
     .topology-segment > button.active {
       background: rgba(88, 166, 255, 0.18);
@@ -295,14 +384,14 @@
     }
     .role-select:hover { border-color: var(--accent); }
     .role-select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
-    .role-select option:disabled { color: #555; }
+    
     .topology-derived {
       font-size: 0.72rem; color: var(--muted);
       font-family: ui-monospace, monospace;
       padding: 0.2rem 0; opacity: 0.8;
     }
     .topology-hint {
-      font-size: 0.72rem; color: #d29922;
+      font-size: 0.72rem; color: var(--warn);
       padding: 0.1rem 0;
       min-height: 1em;  /* reserve a line so the form doesn't jump when the hint shows/hides */
     }
@@ -315,7 +404,7 @@
       border: 1px solid var(--border); border-radius: 999px; cursor: pointer;
       letter-spacing: 0.02em;
     }
-    .sort-pill:hover { background: #21262d; color: var(--text); }
+    .sort-pill:hover { background: var(--hover); color: var(--text); }
     .sort-pill.active {
       background: rgba(88, 166, 255, 0.15);
       border-color: var(--accent);
@@ -329,7 +418,7 @@
       background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
       border-radius: 5px; cursor: pointer; letter-spacing: 0.04em;
     }
-    .export-btn:hover:not(:disabled) { background: #21262d; border-color: var(--accent); color: var(--accent); }
+    .export-btn:hover:not(:disabled) { background: var(--hover); border-color: var(--accent); color: var(--accent); }
     .export-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
     /* Dual-knob range slider */
@@ -361,7 +450,7 @@
       -webkit-appearance: none; appearance: none;
       width: 14px; height: 14px;
       border-radius: 50%;
-      background: var(--accent); border: 2px solid #0d1117;
+      background: var(--accent); border: 2px solid var(--thumb-border);
       cursor: grab;
       margin-top: -5px;
     }
@@ -370,7 +459,7 @@
       pointer-events: auto;
       width: 12px; height: 12px;
       border-radius: 50%;
-      background: var(--accent); border: 2px solid #0d1117;
+      background: var(--accent); border: 2px solid var(--thumb-border);
       cursor: grab;
     }
     .range-slider input[type="range"]::-webkit-slider-runnable-track {
