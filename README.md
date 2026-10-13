@@ -72,6 +72,18 @@ publish (the optimized build is noticeably faster).
   `target`, `sort` (`bestfit|ratio|efficiency|simplicity`). Values are percent-encoded.
 - Light and dark themes follow `prefers-color-scheme`; the layout is a single column on phones.
 
+### Deploy (Docker)
+
+The page is fully static. The `Dockerfile` builds it with sbt and serves it with Apache httpd on
+port 80. CI (`.github/workflows/ci.yml`) runs the tests on every push and pull request. It publishes
+the image to `ghcr.io/lhns/compoundplanetarygearcalculator` on pushes to `master` (`latest`, `sha-…`)
+and on `v*` tags (the version).
+
+```
+docker run -d --name cpgc -p 8080:80 ghcr.io/lhns/compoundplanetarygearcalculator:latest
+docker build -t cpgc-web .   # local build
+```
+
 ### Library
 
 ```scala
