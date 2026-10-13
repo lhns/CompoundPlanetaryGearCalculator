@@ -16,6 +16,8 @@ import scala.util.Try
 class UiLogicSpec extends FunSuite:
 
   import UiLogic.*
+  import UrlState.*
+  import TopologyEdit.*
 
   private val base = FormValues(
     topology = Topology.cdcpCompound,

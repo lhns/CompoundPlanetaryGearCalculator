@@ -5,9 +5,8 @@ import com.raquo.laminar.api.L.svg as s
 import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
 import cpgc.domain.{CompoundDesign, Mode, Stage}
 import cpgc.kinematics.{BodyAngles, Kinematics}
-import cpgc.render.GearGeometry
-import cpgc.render.GearGeometry.{gearRadii as coreGearRadii}
 import cpgc.render.Phasing
+import cpgc.web.SchematicLayout.{bodyAnchor, rotateXform, toRad}
 
 /** Animated SVG schematic. Static layout is rebuilt only when the selected
   * design changes; the per-frame `phase` signal only updates `transform`
@@ -198,7 +197,7 @@ object Schematic:
   ): Vector[SvgElement] =
     val topology = d.topology
     val twoStage = d.stage2.isDefined
-    val (cx1, cx2) = if twoStage then (-110.0, 110.0) else (0.0, 0.0)
+    val (cx1, cx2) = SchematicLayout.stageCenters(twoStage)
 
     val angles: Signal[BodyAngles] = phaseSignal.map(Kinematics.at(d, _))
     val roles = rolesFor(topology)
@@ -230,16 +229,6 @@ object Schematic:
 
     headerBanner(d) ++ s1 ++ s2.getOrElse(Vector.empty) ++ divider ++ footerInfo(d) ++ legend()
 
-  /** Visual anchor (x, y in viewBox units) of a body within a stage group
-    * centred at `cx`. Suns sit at the centre (y=0), rings at the top rim
-    * (y=-100), carriers slightly below centre (y=+40 — the carrier disc). */
-  private def bodyAnchor(b: Body, cx1: Double, cx2: Double): (Double, Double) = b match
-    case Body.S1 => (cx1, 0.0)
-    case Body.C1 => (cx1, 40.0)
-    case Body.R1 => (cx1, -100.0)
-    case Body.S2 => (cx2, 0.0)
-    case Body.C2 => (cx2, 40.0)
-    case Body.R2 => (cx2, -100.0)
 
   /** Inter-stage coupling annotation overlaid between the two stage groups.
     *
@@ -302,7 +291,7 @@ object Schematic:
       case Some(Mode.NSS)         => "Compound planetary (no second sun)"
       case None if d.topology == Topology.sunlessCdcpCompound => "Carrier-driven compound planetary (sun-less)"
       case None =>
-        UiLogic.topologyPreset(d.topology) match
+        TopologyEdit.topologyPreset(d.topology) match
           case GearboxPreset.RingToSunCascade => "Ring-to-sun cascade compound"
           case GearboxPreset.Ravigneaux       => "Ravigneaux compound planetary"
           case GearboxPreset.Simpson          => "Simpson compound planetary"
@@ -358,24 +347,6 @@ object Schematic:
       )
     )
 
-  private def rotateXform(angleRad: Double, ox: Double, oy: Double): String =
-    val deg = angleRad * 180.0 / math.Pi
-    s"rotate(${"%.4f".format(deg)} ${"%.3f".format(ox)} ${"%.3f".format(oy)})"
-
-  // ── Involute tooth geometry ────────────────────────────────────────────────
-  //
-  // Two involute gears at the correct centre distance mesh tangentially along
-  // the common line of action regardless of relative rotation. The flanks
-  // touch as smooth curves, sliding past each other — there is no discrete
-  // tip-on-tooth clash to engineer around, and no fragile phase that needs to
-  // align across N simultaneous contacts. This is what real gears use.
-
-  private val PressureAngleRad: Double = GearGeometry.PressureAngleRad
-  private val FlankSamples: Int  = 16
-  private val TipSamples: Int    = 4
-  private val TroughSamples: Int = 3
-
-  private inline def inv(t: Double): Double = GearGeometry.inv(t)
 
   /** Counter for unique clip-path IDs. Each rendered polygon gets its own
     * clipPath so the rendered stroke can be clipped to the polygon interior. */
@@ -389,9 +360,8 @@ object Schematic:
     svg.svgAttr[String]("clip-path", com.raquo.laminar.codecs.StringAsIsCodec, namespace = None)
 
 
-  /** External involute gear (sun, planet). Polygon traces tip → right flank
-    * (involute) → trough at root → next tooth, around the full circumference.
-    */
+
+  /** External involute gear (sun, planet). */
   private def involuteToothedGear(
       cx: Double, cy: Double,
       teeth: Int, modulePx: Double,
@@ -400,86 +370,9 @@ object Schematic:
       fillOpacity: Double = 0.55,
       strokeWidth: Double = 0.6
   ): SvgElement =
-    val r        = coreGearRadii(teeth, modulePx, internal = false)
-    val twoPi    = 2.0 * math.Pi
-    val toothPitch = twoPi / teeth
-    val deltaBase  = math.Pi / (2.0 * teeth) + inv(PressureAngleRad)
+    pathWithInsideStroke(SchematicLayout.externalGearPath(cx, cy, teeth, modulePx, rotateRad), color, fillOpacity, strokeWidth)
 
-    def alphaAt(rr: Double): Double =
-      if rr <= r.base then 0.0 else math.acos(r.base / rr)
-
-    val sb = StringBuilder()
-    var first = true
-    inline def add(x: Double, y: Double): Unit =
-      if first then { sb ++= s"M ${"%.3f".format(x)} ${"%.3f".format(y)} "; first = false }
-      else            sb ++= s"L ${"%.3f".format(x)} ${"%.3f".format(y)} "
-    inline def addPolar(rr: Double, theta: Double): Unit =
-      add(cx + rr * math.cos(theta), cy + rr * math.sin(theta))
-
-    val rFlankStart = math.max(r.base, r.root)
-    val flankSpan   = r.outer - rFlankStart
-
-    var k = 0
-    while k < teeth do
-      val thetaC = k * toothPitch + rotateRad
-
-      // Right flank: rFlankStart → rOuter
-      var s = 0
-      while s < FlankSamples do
-        val frac = s.toDouble / (FlankSamples - 1)
-        val rr   = rFlankStart + frac * flankSpan
-        addPolar(rr, thetaC + deltaBase - inv(alphaAt(rr)))
-        s += 1
-
-      // Tip arc
-      val alphaA       = alphaAt(r.outer)
-      val thetaRightTop = thetaC + deltaBase - inv(alphaA)
-      val thetaLeftTop  = thetaC - deltaBase + inv(alphaA)
-      s = 1
-      while s <= TipSamples do
-        val frac = s.toDouble / (TipSamples + 1)
-        addPolar(r.outer, thetaRightTop + frac * (thetaLeftTop - thetaRightTop))
-        s += 1
-
-      // Left flank: rOuter → rFlankStart
-      s = 0
-      while s < FlankSamples do
-        val frac = 1.0 - s.toDouble / (FlankSamples - 1)
-        val rr   = rFlankStart + frac * flankSpan
-        addPolar(rr, thetaC - deltaBase + inv(alphaAt(rr)))
-        s += 1
-
-      // Drop to root if r_root < r_base
-      val thetaLeftBase = thetaC - deltaBase
-      if r.root < r.base then addPolar(r.root, thetaLeftBase)
-
-      // Trough samples
-      val thetaNextRightBase = thetaC + toothPitch + deltaBase
-      s = 1
-      while s < TroughSamples do
-        val frac = s.toDouble / TroughSamples
-        addPolar(r.root, thetaLeftBase + frac * (thetaNextRightBase - thetaLeftBase))
-        s += 1
-
-      // Trough end / climb back up to next tooth's right-flank base
-      if r.root < r.base then addPolar(r.root, thetaNextRightBase)
-
-      k += 1
-
-    sb ++= "Z"
-    pathWithInsideStroke(sb.toString, color, fillOpacity, strokeWidth)
-
-  /** Internal involute ring gear. Teeth point inward. Polygon traces the inner
-    * tooth contour: tip → right flank (involute, outward) → root → next tooth.
-    *
-    * For an internal gear, the flank position at radius r (relative to the
-    * tooth's centreline θ_c) is:
-    *   θ_right(r) = θ_c + π/(2T) + (inv(α(r)) − inv(α_p))
-    * At r = r_pitch this is θ_c + π/(2T) (half-pitch). The correction is
-    * positive above pitch (wider at root) and negative below pitch (narrower
-    * at tip). Below r_base, no involute — straight radial down to the tip
-    * apex on the centreline.
-    */
+  /** Internal involute ring gear. Teeth point inward. */
   private def involuteRing(
       cx: Double, cy: Double,
       teeth: Int, modulePx: Double,
@@ -488,71 +381,7 @@ object Schematic:
       fillOpacity: Double = 0.0,
       strokeWidth: Double = 0.7
   ): SvgElement =
-    val r          = coreGearRadii(teeth, modulePx, internal = true)
-    val twoPi      = 2.0 * math.Pi
-    val toothPitch = twoPi / teeth
-    val deltaPitch = math.Pi / (2.0 * teeth)        // half tooth thickness at pitch
-    val invP       = inv(PressureAngleRad)
-    val rTip       = r.outer
-    val rRoot      = r.root
-    val rFlankLo   = math.max(r.base, rTip)         // lowest valid involute radius
-
-    def alphaAt(rr: Double): Double =
-      if rr <= r.base then 0.0 else math.acos(r.base / rr)
-
-    /** Right-flank world angle (internal involute) at radius rr for a tooth
-      * centred at thetaC. */
-    inline def thetaRight(thetaC: Double, rr: Double): Double =
-      thetaC + deltaPitch + (inv(alphaAt(rr)) - invP)
-
-    inline def thetaLeft(thetaC: Double, rr: Double): Double =
-      thetaC - deltaPitch - (inv(alphaAt(rr)) - invP)
-
-    val sb = StringBuilder()
-    var first = true
-    inline def add(x: Double, y: Double): Unit =
-      if first then { sb ++= s"M ${"%.3f".format(x)} ${"%.3f".format(y)} "; first = false }
-      else            sb ++= s"L ${"%.3f".format(x)} ${"%.3f".format(y)} "
-    inline def addPolar(rr: Double, theta: Double): Unit =
-      add(cx + rr * math.cos(theta), cy + rr * math.sin(theta))
-
-    var k = 0
-    while k < teeth do
-      val thetaC = k * toothPitch + rotateRad
-
-      // Tip apex on centreline (innermost)
-      addPolar(rTip, thetaC)
-
-      // Right flank: rFlankLo → rRoot (outward). FlankSamples+1 points.
-      var s = 0
-      while s <= FlankSamples do
-        val frac = s.toDouble / FlankSamples
-        val rr   = rFlankLo + frac * (rRoot - rFlankLo)
-        addPolar(rr, thetaRight(thetaC, rr))
-        s += 1
-
-      // Trough along rRoot to next tooth (TroughSamples − 1 intermediate points)
-      val thetaRightRoot    = thetaRight(thetaC, rRoot)
-      val thetaNextLeftRoot = thetaLeft(thetaC + toothPitch, rRoot)
-      s = 1
-      while s < TroughSamples do
-        val frac = s.toDouble / TroughSamples
-        addPolar(rRoot, thetaRightRoot + frac * (thetaNextLeftRoot - thetaRightRoot))
-        s += 1
-
-      // Left flank of next tooth: rRoot → rFlankLo. FlankSamples+1 points.
-      val thetaNextC = thetaC + toothPitch
-      s = 0
-      while s <= FlankSamples do
-        val frac = 1.0 - s.toDouble / FlankSamples
-        val rr   = rFlankLo + frac * (rRoot - rFlankLo)
-        addPolar(rr, thetaLeft(thetaNextC, rr))
-        s += 1
-
-      k += 1
-
-    sb ++= "Z"
-    pathWithInsideStroke(sb.toString, color, fillOpacity, strokeWidth)
+    pathWithInsideStroke(SchematicLayout.internalGearPath(cx, cy, teeth, modulePx, rotateRad), color, fillOpacity, strokeWidth)
 
   /** Render a closed polygon path with an "inside" stroke. SVG has no native
     * `stroke-alignment: inside`, so we use the well-known clip-path workaround:
@@ -582,6 +411,7 @@ object Schematic:
       )
     )
 
+
   private def stageGroup(
       stage: Stage,
       cx: Double,
@@ -597,22 +427,13 @@ object Schematic:
       carrierRole: Role,
       ringRole: Role,
   ): Vector[SvgElement] =
-    // Planet i is drawn at angle 2πi/N − π/2, i.e. the phasing frame (planet k at k/N turns)
-    // rotated by a quarter turn; mesh conditions are invariant under that common shift.
-    def toRad(turns: Double): Double = 2.0 * math.Pi * (turns - 0.25)
-    val targetOuterR = 95.0
-    val rawOuterR    = stage.ringOuterDiameter / 2.0
-    val scale        = targetOuterR / rawOuterR
-    val px           = (x: Double) => x * scale
-
-    val mPx          = px(stage.module.value)
-    val sunPitchR    = mPx * stage.set.sun.toDouble / 2.0
-    val planetPitchR = mPx * stage.set.planet.toDouble / 2.0
-    val ringPitchR   = mPx * stage.set.ring.toDouble / 2.0
-    // Ring's outer rim flush with the polygon's back-of-tooth (dedendum).
-    val ringOR    = coreGearRadii(stage.set.ring.toInt, mPx, internal = true).root
-    val carrierR  = px(stage.centerToCenter)
-    val n         = stage.set.numPlanets
+    val lay          = SchematicLayout.stageLayout(stage, cx)
+    val mPx          = lay.mPx
+    val sunPitchR    = lay.sunPitchR
+    val planetPitchR = lay.planetPitchR
+    val ringPitchR   = lay.ringPitchR
+    val ringOR       = lay.ringOR
+    val carrierR     = lay.carrierR
 
     val sunSig: Signal[Double] = angles.map(b =>
       if stageIndex == 1 then b.sun1 else b.sun2)
@@ -707,14 +528,14 @@ object Schematic:
     // rotating ring group so the badge text stays upright).
     val ringRoleBadge = ringRole match
       case Role.Plain => s.g()
-      case _          => roleBadge(ringRole, cx, -ringOR - 4)
+      case _          => roleBadge(ringRole, lay.ringBadge._1, lay.ringBadge._2)
 
     // Sun-level static IN/OUT badge at the centre (offset slightly above the
     // sun pin so the rotating sun doesn't sweep over it).
     val sunRoleBadge = sunRole match
       case Role.Plain         => s.g()
       case _ if !showSun      => s.g()
-      case _                  => roleBadge(sunRole, cx, -sunPitchR - mPx * 1.6)
+      case _                  => roleBadge(sunRole, lay.sunBadge._1, lay.sunBadge._2)
 
     // Carrier: outer <g> rotates about stage center; planets sit inside at static
     // angles, with their own inner <g> handling per-planet spin in the carrier frame.
@@ -734,10 +555,7 @@ object Schematic:
         svg.strokeDashArray := "3 3", svg.strokeLineCap := "butt",
         s.strokeOpacity := carrierOpacity
       ),
-      (0 until n).flatMap { i =>
-        val theta = 2.0 * math.Pi * i / n - math.Pi / 2.0
-        val pxC   = cx + carrierR * math.cos(theta)
-        val pyC   = carrierR * math.sin(theta)
+      lay.planets.zipWithIndex.flatMap { case ((pxC, pyC), i) =>
         // Carrier spoke (static within carrier <g>)
         val spoke = s.line(
           s.x1 := f"$cx%.2f", s.y1 := "0",
@@ -762,16 +580,15 @@ object Schematic:
     // Carrier-level IN badge at the bottom of the carrier circle.
     val carrierRoleBadge = carrierRole match
       case Role.Plain => s.g()
-      case _          => roleBadge(carrierRole, cx, carrierR + 9)
+      case _          => roleBadge(carrierRole, lay.carrierBadge._1, lay.carrierBadge._2)
 
     val labelText =
       val pr = s"P${stage.set.planet.toInt} R${stage.set.ring.toInt}"
       if showSun then s"$label · S${stage.set.sun.toInt} $pr" else s"$label · $pr"
     val labelEl = s.text(
-      s.x := f"$cx%.2f", s.y := f"${ringOR + 16}%.2f", s.textAnchor := "middle",
+      s.x := f"$cx%.2f", s.y := f"${lay.labelY}%.2f", s.textAnchor := "middle",
       s.fill := SubText, s.fontSize := "11", s.fontFamily := "ui-monospace, monospace",
       labelText
     )
 
     Vector(ringEl, carrierG, sunEl, ringRoleBadge, sunRoleBadge, carrierRoleBadge, labelEl)
-
