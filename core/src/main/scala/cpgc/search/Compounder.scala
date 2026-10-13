@@ -19,28 +19,19 @@ object Compounder:
   /** First-stage module (ADR 0016): the OD bounds the ring's outside, so
     * `m1 = (OD − 2·ringWall) / (Tr1 + 2.5)`. `None` when that is not a positive
     * finite number (never throws). */
-  def firstModule(cfg: SearchConfig, s1: GearSet): Option[Module] =
-    val m = firstModuleValue(cfg, s1)
-    if m > 0.0 && m.isFinite then Some(Module.unsafe(m)) else None
+  def firstModuleValue(cfg: SearchConfig, s1: GearSet): Double =
+    val m = Stage.moduleForOuterDiameter(cfg.firstStageOD, s1.ring.toDouble, cfg.ringWall)
+    if m > 0.0 && m.isFinite then m else Double.NaN
 
-  private def firstModuleValue(cfg: SearchConfig, s1: GearSet): Double =
-    (cfg.firstStageOD - 2.0 * cfg.ringWall) / (s1.ring.toDouble + 2.5)
-
-  /** Modules for both stages. A stacked pinion bridges both stages, so the
-    * centre distance must match: `m2 = m1 · (S1 + P1) / (S2 + P2)` (virtual
-    * suns for sun-less stages). Otherwise `m2 = m1`. */
-  def matchModules(
-      cfg: SearchConfig, s1: GearSet, s2: GearSet, stacked: Boolean
-  ): Option[(Module, Module)] =
-    firstModule(cfg, s1).flatMap { m1 =>
-      if !stacked then Some((m1, m1))
-      else
-        val m2 = secondModuleValue(m1.value, s1, s2)
-        if m2 > 0.0 && m2.isFinite then Some((m1, Module.unsafe(m2))) else None
-    }
-
-  private def secondModuleValue(m1: Double, s1: GearSet, s2: GearSet): Double =
-    m1 * (s1.sun.toDouble + s1.planet.toDouble) / (s2.sun.toDouble + s2.planet.toDouble)
+  /** Stage-2 module given `m1` (NaN when invalid). A stacked pinion bridges both
+    * stages, so the centre distance must match: `m2 = m1 · (S1 + P1) / (S2 + P2)`
+    * (virtual suns for sun-less stages). Otherwise `m2 = m1`. This is the single
+    * module-matching implementation: the evaluator and the tests both call it. */
+  def secondModuleValue(m1: Double, s1: GearSet, s2: GearSet, stacked: Boolean): Double =
+    if !stacked then m1
+    else
+      val m2 = m1 * Stage.centerDistance(1.0, s1) / Stage.centerDistance(1.0, s2)
+      if m2 > 0.0 && m2.isFinite then m2 else Double.NaN
 
   private def gcd(a: Int, b: Int): Int = if b == 0 then math.abs(a) else gcd(b, a % b)
 
@@ -58,10 +49,20 @@ object Compounder:
     * guarantee `N1 == N2` for stacked topologies. */
   def satisfiesSpacing(
       topology: Topology, phasedPinions: Boolean, s1: GearSet, s2: Option[GearSet]
+  ): Boolean = satisfiesSpacing(topology, phasedPinions, s1, s2.orNull)
+
+  /** Same, allocation-free for the search hot path (`s2 == null` for a single stage). */
+  def satisfiesSpacing(
+      topology: Topology, phasedPinions: Boolean, s1: GearSet, s2: GearSet
   ): Boolean =
-    (!topology.s1Present || s1.evenSpacing) &&
-      s2.forall(g => !topology.s2Present || g.evenSpacing) &&
-      (phasedPinions || !topology.stacked || s2.forall(stackedCrossOk(s1, _)))
+    stageSpacingOk(topology.s1Present, s1) &&
+      (s2 == null || (
+        stageSpacingOk(topology.s2Present, s2) &&
+          (phasedPinions || !topology.stacked || stackedCrossOk(s1, s2))))
+
+  /** The per-stage part of the rule: a stage with a sun needs `(S + R) % N == 0`. Also used to
+    * prune the stage pools before pairing. */
+  def stageSpacingOk(sunPresent: Boolean, g: GearSet): Boolean = !sunPresent || g.evenSpacing
 
   /** Reusable candidate checker for one config. After `accept` returns true,
     * `ratio`, `wellConditioned`, `module1` and `module2` describe the candidate.
@@ -78,15 +79,11 @@ object Compounder:
       * (`s2 == null` for a single stage). Cheap rejects come first. */
     def accept(s1: GearSet, s2: GearSet): Boolean =
       if topology.stacked && s2 != null && s2.numPlanets != s1.numPlanets then return false
-      if (topology.s1Present && !s1.evenSpacing) || (s2 != null && topology.s2Present && !s2.evenSpacing) then return false
-      if s2 != null && !cfg.phasedPinions && topology.stacked && !stackedCrossOk(s1, s2) then return false
+      if !satisfiesSpacing(topology, cfg.phasedPinions, s1, s2) then return false
       val m1 = firstModuleValue(cfg, s1)
-      if !(m1 > 0.0 && m1.isFinite) || m1 < cfg.minModule then return false
-      var m2 = m1
-      if s2 != null && topology.stacked then
-        m2 = secondModuleValue(m1, s1, s2)
-        if !(m2 > 0.0 && m2.isFinite) then return false
-      if m2 < cfg.minModule then return false
+      if m1.isNaN || m1 < cfg.minModule then return false
+      val m2 = if s2 == null then m1 else secondModuleValue(m1, s1, s2, topology.stacked)
+      if m2.isNaN || m2 < cfg.minModule then return false
       if !ws.solve(s1, s2, 1.0) then return false
       val q = ws.ratioOrNaN
       if q.isNaN then return false
@@ -116,7 +113,8 @@ object Compounder:
       topology         = topology,
       ratio            = r,
       efficiency       = Efficiency.overall(topology),
-      validity         = validity
+      validity         = validity,
+      phasedPinions    = cfg.phasedPinions && topology.stacked
     )
 
   /** Pair two enumerated stages into a compound design. */

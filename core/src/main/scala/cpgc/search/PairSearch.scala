@@ -55,7 +55,7 @@ final class PairSearch(cfg: SearchConfig):
     case 0 =>
       if iter1.hasNext then
         val g = iter1.next()
-        if !topology.s1Present || g.evenSpacing then buf1 += g
+        if Compounder.stageSpacingOk(topology.s1Present, g) then buf1 += g
       else
         phase = if singleStage then 2 else if samePool then 2 else 1
         if buf1.isEmpty then phase = 3
@@ -64,7 +64,7 @@ final class PairSearch(cfg: SearchConfig):
     case 1 =>
       if iter2.hasNext then
         val g = iter2.next()
-        if !topology.s2Present || g.evenSpacing then buf2 += g
+        if Compounder.stageSpacingOk(topology.s2Present, g) then buf2 += g
       else
         if buf2.isEmpty then phase = 3
         else
