@@ -319,20 +319,17 @@ object Schematic:
 
   /** Tiny colour-keyed legend in the bottom-left of the schematic. */
   private def legend(): Vector[SvgElement] =
-    val baseX = -210.0
-    val baseY = -146.0
-    def dot(x: Double, color: String): SvgElement =
-      s.circle(s.cx := f"$x%.2f", s.cy := f"$baseY%.2f",
-               s.r := "3", s.fill := color)
-    def text(x: Double, content: String): SvgElement =
-      s.text(s.x := f"$x%.2f", s.y := f"${baseY + 3}%.2f",
-             s.fill := SubText, s.fontSize := "9",
-             s.fontFamily := "ui-monospace, monospace", content)
-    Vector(
-      dot(baseX,         InputColor),  text(baseX + 6, "input"),
-      dot(baseX + 40,    OutputColor), text(baseX + 46, "output"),
-      dot(baseX + 84,    FixedColor),  text(baseX + 90, "fixed")
-    )
+    val baseX = -212.0
+    val baseY = 128.0 // stacked rows in the bottom-left corner, clear of the title and footer
+    def row(i: Int, color: String, name: String): Vector[SvgElement] =
+      val y = baseY + 12.0 * i
+      Vector(
+        s.circle(s.cx := f"$baseX%.2f", s.cy := f"$y%.2f", s.r := "3", s.fill := color),
+        s.text(s.x := f"${baseX + 7}%.2f", s.y := f"${y + 3}%.2f",
+               s.fill := SubText, s.fontSize := "9",
+               s.fontFamily := "ui-monospace, monospace", name)
+      )
+    row(0, InputColor, "input") ++ row(1, OutputColor, "output") ++ row(2, FixedColor, "fixed")
 
   private def footerInfo(d: CompoundDesign): Vector[SvgElement] =
     val module1 = f"m₁=${d.stage1.module.value}%.2f mm"
