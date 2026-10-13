@@ -22,50 +22,47 @@ object Schematic:
   private val Stage2Planet = "#73d2de"
   private val CarrierColor = "#8b949e"
   private val CouplingColor = "#f0883e" // amber accent for novel inter-stage welds
-  private val TextColor    = "#e6e6e6"
-  private val SubText      = "#a6accd"
-  private val InputColor   = "#7ee787"  // green accent — input gear highlight
-  private val OutputColor  = "#58a6ff"  // blue accent — output gear highlight
+  // Theme-aware colours come from the page's CSS variables (index.html).
+  private val TextColor    = "var(--svg-text)"
+  private val SubText      = "var(--svg-sub)"
+  private val InputColor   = "var(--role-input)"   // green accent — input body
+  private val OutputColor  = "var(--role-output)"  // blue accent — output body
+  private val FixedColor   = "var(--role-fixed)"   // red accent — grounded body
+  private val HubFill      = "var(--svg-hub)"
 
-  /** Which body in a stage is highlighted as input/output. */
+  /** Which role a body is highlighted for. */
   private enum Role:
-    case Input, Output, Plain
+    case Input, Output, Fixed, Plain
 
-  /** Role assignment for a topology — derived once per render. */
+  /** Role of each central body, derived once per render. */
   private final case class Roles(
       stage1Sun:     Role,
       stage1Carrier: Role,
       stage1Ring:    Role,
       stage2Sun:     Role,
+      stage2Carrier: Role,
       stage2Ring:    Role
   )
 
-  private def rolesFor(t: Topology, twoStage: Boolean): Roles =
-    val _ = twoStage  // intentionally unused — kept for caller-side clarity
-    // Generalised role rendering: read every present body's role from the
-    // topology directly. Fixed and Free render as Plain (the legend covers
-    // input + output only; fixed is conventionally signalled by the
-    // grounded-ring hatching, which we keep implicit).
+  private def rolesFor(t: Topology): Roles =
     def renderRole(b: Body): Role = t.roles.get(b) match
       case Some(BodyRole.Input)  => Role.Input
       case Some(BodyRole.Output) => Role.Output
+      case Some(BodyRole.Fixed)  => Role.Fixed
       case _                     => Role.Plain
-    // Carrier role: prefer C1's role, but if C1 is Plain and C2 carries a pin
-    // role (possible with independent-carrier couplings), surface C2's.
-    val carrierRole =
-      val r1 = renderRole(Body.C1)
-      if r1 != Role.Plain then r1 else renderRole(Body.C2)
     Roles(
       stage1Sun     = renderRole(Body.S1),
-      stage1Carrier = carrierRole,
+      stage1Carrier = renderRole(Body.C1),
       stage1Ring    = renderRole(Body.R1),
       stage2Sun     = renderRole(Body.S2),
+      stage2Carrier = renderRole(Body.C2),
       stage2Ring    = renderRole(Body.R2)
     )
 
   private def roleStrokeColor(role: Role, fallback: String): String = role match
     case Role.Input  => InputColor
     case Role.Output => OutputColor
+    case Role.Fixed  => FixedColor
     case Role.Plain  => fallback
 
   private def roleStrokeWidth(role: Role, base: Double): Double = role match
@@ -75,7 +72,6 @@ object Schematic:
   def apply(
       designSignal:           Signal[Option[CompoundDesign]],
       phaseSignal:            Signal[Double],
-      topologySignal:         Signal[Topology],
       searchStateSignal:      Signal[SearchState],
       searchProgressSignal:   Signal[Int],
       searchFractionSignal:   Signal[Double]
@@ -87,12 +83,13 @@ object Schematic:
       svg.preserveAspectRatio := "xMidYMid meet",
       defs(),
       children <-- designSignal
-        .combineWith(topologySignal, searchStateSignal, searchProgressSignal, searchFractionSignal)
+        .combineWith(searchStateSignal, searchProgressSignal, searchFractionSignal)
         .map {
-          case (Some(d), top, _,                          _, _) => renderDesign(d, phaseSignal, top)
-          case (None,    _,   SearchState.NoResults,      _, _) => Vector(placeholderNoResults())
-          case (None,    _,   SearchState.HasResults,     n, f) => Vector(placeholderSearching(n, f))
-          case (None,    _,   SearchState.Searching,      n, f) => Vector(placeholderSearching(n, f))
+          // A design always renders with the topology it was found for (d.topology).
+          case (Some(d), _,                       _, _) => renderDesign(d, phaseSignal)
+          case (None,    SearchState.NoResults,   _, _) => Vector(placeholderNoResults())
+          case (None,    SearchState.Invalid,     _, _) => Vector(placeholderInvalid())
+          case (None,    _,                       n, f) => Vector(placeholderSearching(n, f))
         }
     )
 
@@ -140,7 +137,7 @@ object Schematic:
       s.rect(
         s.x := f"${-TrackHalf}%.1f", s.y := f"$TrackY%.1f",
         s.width := f"${2.0 * TrackHalf}%.1f", s.height := f"$TrackH%.1f",
-        s.fill := "#30363d"
+        s.fill := "var(--svg-track)"
       ),
       // Elapsed-fraction fill
       s.rect(
@@ -168,6 +165,16 @@ object Schematic:
       )
     )
 
+  private def placeholderInvalid(): SvgElement =
+    s.g(
+      s.text(
+        s.x := "0", s.y := "0", s.textAnchor := "middle",
+        s.fill := TextColor, s.fontSize := "14",
+        s.fontFamily := "ui-sans-serif, system-ui",
+        "Fix the highlighted input to search."
+      )
+    )
+
   private def placeholderNoResults(): SvgElement =
     s.g(
       s.text(
@@ -186,14 +193,14 @@ object Schematic:
 
   private def renderDesign(
       d: CompoundDesign,
-      phaseSignal: Signal[Double],
-      topology: Topology
+      phaseSignal: Signal[Double]
   ): Vector[SvgElement] =
+    val topology = d.topology
     val twoStage = d.stage2.isDefined
     val (cx1, cx2) = if twoStage then (-110.0, 110.0) else (0.0, 0.0)
 
-    val angles: Signal[BodyAngles] = phaseSignal.map(Kinematics.at(d, _, topology))
-    val roles = rolesFor(topology, twoStage)
+    val angles: Signal[BodyAngles] = phaseSignal.map(Kinematics.at(d, _))
+    val roles = rolesFor(topology)
 
     val s1 = stageGroup(d.stage1, cx1, "Stage 1", Stage1Sun, Stage1Planet, Stage1Ring,
                         angles, stageIndex = 1, showSun = topology.s1Present,
@@ -205,7 +212,7 @@ object Schematic:
                  angles, stageIndex = 2,
                  showSun = topology.s2Present,
                  sunRole = roles.stage2Sun,
-                 carrierRole = Role.Plain,
+                 carrierRole = roles.stage2Carrier,
                  ringRole = roles.stage2Ring))
 
     // Both couplings are drawn: firstCoupling on the lower label row, second
@@ -288,6 +295,7 @@ object Schematic:
       case Some(Mode.Standard)    => "Compound planetary (sun-driven)"
       case Some(Mode.CDCP)        => "Carrier-driven compound planetary"
       case Some(Mode.NSS)         => "Compound planetary (no second sun)"
+      case None if d.topology == Topology.sunlessCdcpCompound => "Carrier-driven compound planetary (sun-less)"
       case None                   => if d.stage2.isEmpty then "Single-stage planetary (custom roles)" else "Compound planetary (custom topology)"
     Vector(
       s.text(
@@ -304,26 +312,24 @@ object Schematic:
           val r = d.ratio.value
           val sign = if r < 0 then "−" else ""
           val arrow = if r < 0 then " ↺" else ""
-          f"ratio $sign${math.abs(r)}%.3f : 1$arrow     η ${d.efficiency * 100}%.1f%%     N=${d.stage1.set.numPlanets}"
+          f"ratio $sign${math.abs(r)}%.3f : 1$arrow     η ${UiLogic.fmtEfficiency(d.efficiency)}     N=${d.stage1.set.numPlanets}"
         }
       )
     )
 
   /** Tiny colour-keyed legend in the bottom-left of the schematic. */
   private def legend(): Vector[SvgElement] =
-    val baseX = -210.0
-    val baseY = 148.0
-    def dot(x: Double, color: String): SvgElement =
-      s.circle(s.cx := f"$x%.2f", s.cy := f"$baseY%.2f",
-               s.r := "3", s.fill := color)
-    def text(x: Double, content: String): SvgElement =
-      s.text(s.x := f"$x%.2f", s.y := f"${baseY + 3}%.2f",
-             s.fill := SubText, s.fontSize := "9",
-             s.fontFamily := "ui-monospace, monospace", content)
-    Vector(
-      dot(baseX,         InputColor),  text(baseX + 6, "input"),
-      dot(baseX + 40,    OutputColor), text(baseX + 46, "output")
-    )
+    val baseX = -212.0
+    val baseY = 128.0 // stacked rows in the bottom-left corner, clear of the title and footer
+    def row(i: Int, color: String, name: String): Vector[SvgElement] =
+      val y = baseY + 12.0 * i
+      Vector(
+        s.circle(s.cx := f"$baseX%.2f", s.cy := f"$y%.2f", s.r := "3", s.fill := color),
+        s.text(s.x := f"${baseX + 7}%.2f", s.y := f"${y + 3}%.2f",
+               s.fill := SubText, s.fontSize := "9",
+               s.fontFamily := "ui-monospace, monospace", name)
+      )
+    row(0, InputColor, "input") ++ row(1, OutputColor, "output") ++ row(2, FixedColor, "fixed")
 
   private def footerInfo(d: CompoundDesign): Vector[SvgElement] =
     val module1 = f"m₁=${d.stage1.module.value}%.2f mm"
@@ -592,7 +598,8 @@ object Schematic:
 
     val sunSig: Signal[Double] = angles.map(b =>
       if stageIndex == 1 then b.sun1 else b.sun2)
-    val carrierSig: Signal[Double] = angles.map(_.carrier)
+    val carrierSig: Signal[Double] = angles.map(b =>
+      if stageIndex == 1 then b.carrier1 else b.carrier2)
     val planetSpinSig: Signal[Double] = angles.map(b =>
       if stageIndex == 1 then b.planet1Spin else b.planet2Spin)
     val ringSig: Signal[Double] = angles.map(b =>
@@ -650,6 +657,13 @@ object Schematic:
                s.fontFamily := "ui-monospace, monospace",
                s.pointerEvents := "none",
                "OUT")
+      case Role.Fixed  =>
+        s.text(s.x := f"$x%.2f", s.y := f"$y%.2f", s.textAnchor := "middle",
+               s.fill := FixedColor, s.fontSize := "8",
+               s.fontWeight := "700",
+               s.fontFamily := "ui-monospace, monospace",
+               s.pointerEvents := "none",
+               "FIXED")
       case Role.Plain  => s.g()
 
     // Sun: rotates about stage center.
@@ -672,7 +686,7 @@ object Schematic:
             case Role.Plain => 0.8
             case _          => 2.0
           s.circle(s.cx := f"$cx%.2f", s.cy := "0", s.r := f"$sunHubR%.2f",
-                   s.fill := "#0d1117", s.stroke := sunStroke,
+                   s.fill := HubFill, s.stroke := sunStroke,
                    s.strokeWidth := f"$sunHubW%.2f")
         }
       )
@@ -727,7 +741,7 @@ object Schematic:
           involuteToothedGear(pxC, pyC, stage.set.planet.toInt, mPx, planetColor,
             rotateRad = theta + planetPhaseOffset(stage.set.sun.toInt, stage.set.planet.toInt, theta)),
           s.circle(s.cx := f"$pxC%.2f", s.cy := f"$pyC%.2f", s.r := "1.6",
-                   s.fill := "#0d1117", s.stroke := planetColor, s.strokeWidth := "0.6")
+                   s.fill := HubFill, s.stroke := planetColor, s.strokeWidth := "0.6")
         )
         Vector(spoke, planet)
       }
