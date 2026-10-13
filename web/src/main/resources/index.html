@@ -468,6 +468,30 @@
     .range-slider input[type="range"]::-moz-range-track { background: transparent; border: none; }
     .range-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
     .range-inputs input.range-num { font-variant-numeric: tabular-nums; }
+    /* ── Results pager (paging feature) ── */
+    .show-more-right { flex-wrap: wrap; justify-content: flex-end; }
+    .show-more-right .rows-select { width: auto; }
+    .pager { display: inline-flex; align-items: center; gap: 0.25rem; margin-right: 0.5rem; }
+    .pager[hidden] { display: none; }
+    .page-indicator { font-size: 0.78rem; color: var(--muted); font-family: ui-monospace, monospace; padding: 0 0.35rem; white-space: nowrap; }
+    .page-btn {
+      min-width: 28px; height: 28px; padding: 0 0.4rem;
+      background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border); border-radius: 5px;
+      font: inherit; font-size: 0.9rem; line-height: 1; cursor: pointer;
+    }
+    .page-btn:hover:not(:disabled) { border-color: var(--accent); }
+    .page-btn:focus-visible { outline: 1px solid var(--accent); border-color: var(--accent); }
+    .page-btn:disabled { opacity: 0.4; cursor: default; }
+    @media (max-width: 600px) {
+      .page-btn { min-width: 36px; height: 36px; }
+      .show-more-row { flex-wrap: wrap; padding: 0.6rem 0.75rem; }
+      .show-more-row > .panel-sub { flex-basis: 100%; white-space: normal; }
+      .show-more-right { margin-left: 0; width: 100%; justify-content: space-between; flex-wrap: nowrap; }
+      .pager { margin-right: 0; }
+      .page-indicator { padding: 0 0.15rem; }
+    }
+    /* ── end results pager ── */
   </style>
 </head>
 <body>
