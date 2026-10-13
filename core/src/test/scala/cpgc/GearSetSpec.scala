@@ -24,8 +24,3 @@ class GearSetSpec extends ScalaCheckSuite:
       !set.evenSpacing || (set.sun.toInt + set.ring.toInt) % n == 0
     }
   }
-
-  test("sunCarrierRatio for classic 24/12/48 stage is 1/3") {
-    val set = GearSet(Teeth(24), Teeth(12), 3)
-    assertEqualsDouble(set.sunCarrierRatio, 24.0 / 72.0, 1e-12)
-  }

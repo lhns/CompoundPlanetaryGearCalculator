@@ -13,6 +13,3 @@ final case class GearSet(sun: Teeth, planet: Teeth, numPlanets: Int):
   def evenSpacing: Boolean =
     (sun.toInt + ring.toInt) % numPlanets == 0
 
-  /** Sun-input, ring-fixed, carrier-output reduction. */
-  def sunCarrierRatio: Double =
-    sun.toDouble / (ring.toDouble + sun.toDouble)
