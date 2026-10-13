@@ -14,10 +14,6 @@ object Efficiency:
 
   val MeshEff: Double = 0.985
 
-  /** Efficiency of one stage, by power-path mesh count. */
-  def stageEfficiency(hasOwnSun: Boolean): Double =
-    math.pow(MeshEff, if hasOwnSun then 2 else 1)
-
   /** Overall efficiency of a topology: `MeshEff^(2 per stage with a sun, 1 per sun-less stage)`. */
   def overall(topology: Topology): Double =
     math.pow(MeshEff, topology.meshCount)

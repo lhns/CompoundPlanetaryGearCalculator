@@ -11,11 +11,3 @@ final case class Stage(set: GearSet, module: Module, ringWall: Double = cpgc.con
     * wall of `ringWall` on each side. */
   def ringOuterDiameter: Double =
     module.value * (set.ring.toDouble + 2.5) + 2.0 * ringWall
-
-  /** Outer diameter of a planet gear. */
-  def planetOuterDiameter: Double =
-    module.value * (set.planet.toDouble + 2.0)
-
-  /** Outer diameter of the sun gear. */
-  def sunOuterDiameter: Double =
-    module.value * (set.sun.toDouble + 2.0)
