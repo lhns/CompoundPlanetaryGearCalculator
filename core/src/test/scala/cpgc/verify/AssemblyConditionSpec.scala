@@ -1,6 +1,8 @@
 package cpgc.verify
 
+import cpgc.constraints.{Body, BodyRole, Topology}
 import cpgc.domain.{GearSet, Teeth}
+import cpgc.search.Compounder
 import cpgc.verify.AssemblyOracle.{B, Pinion, Stage, Weld}
 import munit.FunSuite
 
@@ -14,8 +16,10 @@ import munit.FunSuite
   *    between the halves), additionally:
   *    `((Tp1·Tr2 − Tp2·Tr1) / gcd(Tp1, Tp2)) % N == 0`, with or without suns.
   *
-  * The production rule (ADR 0012/0015) omits the second condition. It is right
-  * only for individually phased pinions; the gap is pinned by `.fail` tests.
+  * Since ADR 0018 the production predicate (`Compounder.satisfiesSpacing`)
+  * enforces the second condition unless `phasedPinions` is set; the tests below
+  * check it against the oracle both ways. `currentRule` is the pre-ADR-0018
+  * rule, kept for the historical counterexamples.
   */
 class AssemblyConditionSpec extends FunSuite:
   import AssemblyConditionSpec.*
@@ -91,15 +95,20 @@ class AssemblyConditionSpec extends FunSuite:
         assertEquals(stackedRule(s1, s2, n, identical = false), currentRule(s1, s2, n))
     }
 
-  // Production rule (ADR 0012 / 0015) vs the oracle for one-piece pinions.
-  // Known gap: the rule misses the cross condition. Remove `.fail` once the
-  // calculator enforces it.
-  for variant <- Seq(Variant.Standard, Variant.Nss, Variant.Sunless) do
-    test(s"KNOWN GAP: production spacing rule == oracle, stacked $variant, identical pinions".fail) {
+  // Production predicate (ADR 0018) vs the oracle, for every stacked sun variant.
+  for variant <- Variants do
+    test(s"production assembly rule == oracle, stacked $variant, identical pinions (phasedPinions = false)") {
       for (a, b, n) <- stackedCases(Lo, Hi) do
         val (s1, s2) = variant.apply(a, b)
-        assertEquals(currentRule(s1, s2, n),
+        assertEquals(productionRule(variant, s1, s2, n, phased = false),
           AssemblyOracle.stacked(Seq(s1, s2), n, Pinion.Identical(g0)), s"$s1 / $s2 N=$n")
+    }
+
+    test(s"production assembly rule == oracle, stacked $variant, individually phased pinions (phasedPinions = true)") {
+      for (a, b, n) <- stackedCases(Lo, Hi) do
+        val (s1, s2) = variant.apply(a, b)
+        assertEquals(productionRule(variant, s1, s2, n, phased = true),
+          AssemblyOracle.stacked(Seq(s1, s2), n, Pinion.Individual), s"$s1 / $s2 N=$n")
     }
 
   test("minimal counterexample: Tp1 = Tp2 = 10, Ts 20 / 21, N = 2") {
@@ -202,7 +211,7 @@ object AssemblyConditionSpec:
   def stackedRule(s1: Stage, s2: Stage, n: Int, identical: Boolean): Boolean =
     sumOk(s1, n) && sumOk(s2, n) && (!identical || crossOk(s1, s2, n))
 
-  /** The production rule (ADR 0012 / 0015): each stage whose sun is present
+  /** The pre-ADR-0018 rule (ADR 0012 / 0015): each stage whose sun is present
     * must satisfy `GearSet.evenSpacing`; sun-less stages impose nothing. */
   def currentRule(s1: Stage, s2: Stage, n: Int): Boolean =
     Seq(s1, s2).forall(st => st.sun.forall(ts => GearSet(Teeth(ts), Teeth(st.planet), n).evenSpacing))
@@ -221,6 +230,22 @@ object AssemblyConditionSpec:
       (mk(a, sun1), mk(b, sun2))
 
   val Variants: Seq[Variant] = Variant.values.toSeq
+
+  private val noSun1Compound: Topology = Topology(2, Map(
+    Body.S1 -> BodyRole.Absent, Body.C1 -> BodyRole.Input, Body.R1 -> BodyRole.Fixed,
+    Body.S2 -> BodyRole.Free, Body.C2 -> BodyRole.Free, Body.R2 -> BodyRole.Output))
+
+  /** The stacked topology with the variant's suns. */
+  def topologyOf(v: Variant): Topology = v match
+    case Variant.Standard => Topology.standardCompound
+    case Variant.Nss      => Topology.nssCompound
+    case Variant.NoSun1   => noSun1Compound
+    case Variant.Sunless  => Topology.sunlessCdcpCompound
+
+  /** `Compounder.satisfiesSpacing` on the oracle's stages (virtual suns `R − 2P`). */
+  def productionRule(v: Variant, s1: Stage, s2: Stage, n: Int, phased: Boolean): Boolean =
+    def gs(st: Stage) = GearSet(Teeth(st.ring - 2 * st.planet), Teeth(st.planet), n)
+    Compounder.satisfiesSpacing(topologyOf(v), phased, gs(s1), Some(gs(s2)))
 
   /** All `((Ts1, Tp1), (Ts2, Tp2), N)` with teeth in `lo..hi` and N in 2..6. */
   def stackedCases(lo: Int, hi: Int): Iterator[((Int, Int), (Int, Int), Int)] =

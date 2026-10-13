@@ -63,14 +63,14 @@ object Coupling:
     * and module must match). Only `PlanetStack`. */
   def stacksPlanets(c: Coupling): Boolean = c == PlanetStack
 
-  /** Assembly-phase feasibility: can a gear pair `(s1, s2)` actually be built
-    * with this inter-stage coupling? For every coupling in the current model
-    * the requirement reduces to each stage's own even-spacing rule
-    * `(S + R) % N == 0` — the welded shafts don't intermesh with each other,
-    * so the install phase is a free parameter. `Compounder.satisfiesSpacing`
-    * further relaxes this per-mode for the legacy CDCP / NSS topologies.
-    * Validated against a brute-force tooth-mesh enumerator in
-    * `AssemblyPhaseSpec`. */
+  /** Assembly feasibility of a gear pair `(s1, s2)` for this coupling, reduced to
+    * each stage's own even-spacing rule `(S + R) % N == 0`: central-shaft welds
+    * don't intermesh, so the install phase is a free parameter. This is exact
+    * for single stages and for compounds without stacked planets (verified
+    * against the tooth-phase oracle in `AssemblyConditionSpec`). It is **not**
+    * the full rule for `PlanetStack`: identical stacked pinions also need the
+    * cross term of ADR 0018, which `Compounder.satisfiesSpacing` enforces.
+    * Sun-less stages are exempt from the even-spacing rule (ADR 0015 §5). */
   def assemblable(c: Coupling, s1Even: Boolean, s2Even: Boolean): Boolean =
     s1Even && s2Even
 

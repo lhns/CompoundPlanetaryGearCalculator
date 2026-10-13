@@ -3,8 +3,6 @@ package cpgc.search
 import cpgc.constraints.Topology
 import cpgc.domain.{CompoundDesign, Ratio}
 
-import scala.collection.mutable
-
 /** Ranks designs by absolute error to a set of target ratios. Pure interface,
   * mutable bounded heap inside for performance.
   */
@@ -37,13 +35,14 @@ object Scorer:
     val s2 = d.stage2.fold(0)(s => s.set.sun.toInt + s.set.planet.toInt + s.set.ring.toInt)
     s1.sun.toInt + s1.planet.toInt + s1.ring.toInt + s2
 
-  /** Canonical key for deduplication: tooth counts across both stages + topology. */
-  def canonicalKey(d: CompoundDesign): (Topology, Int, Int, Int, Int, Int, Int) =
+  /** Canonical key for deduplication: topology, both stages' teeth and both
+    * planet counts (N1, N2; 0 for an absent stage 2). */
+  def canonicalKey(d: CompoundDesign): (Topology, Int, Int, Int, Int, Int, Int, Int, Int) =
     val s1 = d.stage1.set
-    val (s2s, s2p, s2r) = d.stage2 match
-      case Some(st) => (st.set.sun.toInt, st.set.planet.toInt, st.set.ring.toInt)
-      case None     => (0, 0, 0)
-    (d.topology, s1.sun.toInt, s1.planet.toInt, s1.ring.toInt, s2s, s2p, s2r)
+    val (s2s, s2p, s2r, n2) = d.stage2 match
+      case Some(st) => (st.set.sun.toInt, st.set.planet.toInt, st.set.ring.toInt, st.set.numPlanets)
+      case None     => (0, 0, 0, 0)
+    (d.topology, s1.sun.toInt, s1.planet.toInt, s1.ring.toInt, s2s, s2p, s2r, s1.numPlanets, n2)
 
   /** Sort an iterable of designs by the chosen criterion and deduplicate by
     * `canonicalKey`. Returns a materialised Vector. */
@@ -51,35 +50,31 @@ object Scorer:
       designs: Iterable[CompoundDesign], by: SortBy, targets: Seq[Ratio]
   ): Vector[CompoundDesign] =
     val ordering: Ordering[CompoundDesign] = by match
-      case SortBy.BestFit    => Ordering.by(d => bestTargetError(targets, d.ratio))
+      case SortBy.BestFit    =>
+        if targets.isEmpty then Ordering.by(d => math.abs(d.ratio.value))
+        else Ordering.by(d => bestTargetError(targets, d.ratio))
       case SortBy.Ratio      => Ordering.by(d => math.abs(d.ratio.value))
       case SortBy.Efficiency => Ordering.by[CompoundDesign, Double](_.efficiency).reverse
       case SortBy.Simplicity => Ordering.by(toothCount)
     designs.iterator.toVector.distinctBy(canonicalKey).sorted(using ordering)
 
-  /** Keep top-K designs per target across an arbitrarily large stream. */
+  /** Keep the K best designs per target across an arbitrarily large stream
+    * (smallest absolute error first; ties keep the earlier design). */
   def topPerTarget(
-      designs: LazyList[CompoundDesign],
+      designs: Iterable[CompoundDesign],
       targets: Seq[Ratio],
       k: Int
   ): Map[Ratio, Vector[Scored]] =
     if targets.isEmpty || k <= 0 then Map.empty
     else
-      given Ordering[Scored] = Ordering.by[Scored, Double](_.error).reverse
-      val heaps = targets.map(t => t -> mutable.PriorityQueue.empty[Scored]).toMap
+      val accs = targets.distinct.map(t => t -> new TopK[Scored](k))
       designs.foreach { d =>
-        targets.foreach { t =>
-          val s = Scored(t, absoluteError(t, d.ratio), d)
-          val h = heaps(t)
-          if h.size < k then h.enqueue(s)
-          else if h.head.error > s.error then
-            h.dequeue()
-            h.enqueue(s)
-        }
+        val key = canonicalKey(d)
+        for (t, acc) <- accs do
+          val e = absoluteError(t, d.ratio)
+          acc.offer(e, key, Scored(t, e, d))
       }
-      heaps.view
-        .mapValues(_.dequeueAll.toVector.sortBy(_.error))
-        .toMap
+      accs.map((t, acc) => t -> acc.result).toMap
 
   /** Rank a fully materialized list (used when no targets supplied). */
   def rankByRatio(designs: Iterable[CompoundDesign]): Vector[CompoundDesign] =

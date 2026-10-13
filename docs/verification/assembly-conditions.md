@@ -21,9 +21,9 @@ For equal pinions (`Tp1 = Tp2`) it reduces to the familiar split-ring rule `(Tr2
 When both suns are present and both stage sums hold, it is equivalent to
 `((Tp2·Ts1 − Tp1·Ts2) / gcd) % N == 0`.
 
-**Production (ADR 0012 / 0015) is right for single stages and non-stacked compounds, and wrong for every
-stacked compound with identical pinions.** It omits the cross term, so it accepts designs that cannot be
-built. The smallest counterexample is `Tp1 = Tp2 = 6`, `Tr1 = 18`, `Tr2 = 19`, `N = 2` (rings differ by 1).
+**Before ADR 0018, production (ADR 0012 / 0015) was right for single stages and non-stacked compounds, and wrong for every
+stacked compound with identical pinions. `Compounder.satisfiesSpacing` now enforces the cross term (unless `phasedPinions`).** It omitted the cross term, so it accepted designs that could not be
+built. The smallest counterexample was `Tp1 = Tp2 = 6`, `Tr1 = 18`, `Tr2 = 19`, `N = 2` (rings differ by 1).
 The NSS search winner from `SpacingExperimentSpec`, design B (`S1 53 / P1 11 / R1 75`,
 `P2 14 / R2 100`, `N = 4`), does not assemble: `11·100 − 14·75 = 50`, and `50 % 4 = 2`. Design A (Standard) does assemble.
 

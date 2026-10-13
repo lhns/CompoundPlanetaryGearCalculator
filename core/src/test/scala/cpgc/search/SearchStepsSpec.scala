@@ -7,7 +7,7 @@ import munit.FunSuite
 
 /** Round-trip equivalence between the step-grained `Calculator.searchSteps`
   * iterator and the existing LazyList APIs (`Calculator.search`,
-  * `Calculator.searchTargeted`). They share the same candidate space and the
+  * `Calculator.best`). They share the same candidate space and the
   * same per-pair `Compounder.compound` decisions; the step iterator only
   * changes the **rate** at which work is exposed to the caller. Drain both
   * surfaces and compare canonical-key sets. */
@@ -50,15 +50,12 @@ class SearchStepsSpec extends FunSuite:
     assertEquals(keys(drain(cfg)), keys(Calculator.search(cfg)))
   }
 
-  test("searchSteps == searchTargeted for Standard with targets") {
+  test("targets don't change the candidate space (one engine for all searches)") {
     val cfg = baseConfig(Mode.Standard).copy(targets = Seq(Ratio(40.0), Ratio(80.0)))
-    // searchTargeted's closed-form is a strict subset of the full cross
-    // product; searchSteps takes the same closed-form path when the topology
-    // is one of the four legacy modes. Both should produce the same set.
-    assertEquals(keys(drain(cfg)), keys(Calculator.searchTargeted(cfg)))
+    assertEquals(keys(drain(cfg)), keys(Calculator.search(cfg.copy(targets = Seq.empty))))
   }
 
-  test("searchSteps for novel topology falls back to cross-product == search") {
+  test("searchSteps for a novel topology == search") {
     // A non-legacy role tuple: ring1 as input, S2 as output, carrier fixed.
     val novel = Topology(
       stages = 2,

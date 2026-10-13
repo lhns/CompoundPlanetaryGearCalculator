@@ -6,6 +6,7 @@ import com.monovore.decline.*
 import cpgc.Calculator
 import cpgc.constraints.{SearchConfig, TeethBounds, Topology}
 import cpgc.domain.{Mode, Ratio}
+import cpgc.search.Scorer.SortBy
 import cpgc.`export`.{Csv, Json, OpenScad, Pretty}
 
 import java.io.{FileDescriptor, FileOutputStream, PrintStream}
@@ -66,6 +67,9 @@ object Search:
   private val jsonOut      = Opts.option[Path]("json", "write JSON to this path").orNone
   private val scadOut      = Opts.option[Path]("scad", "emit OpenSCAD for the top design").orNone
   private val noTable      = Opts.flag("no-table", "suppress pretty table on stdout").orFalse
+  private val phased       = Opts.flag("phased-pinions", "stacked planets are cut with a planet-specific twist (drops the identical-pinion assembly rule, ADR 0018)").orFalse
+  private val sortOpt      = Opts.option[String]("sort", "ranking: best | ratio | efficiency | simplicity (best = closest to the targets, or smallest ratio without targets)")
+    .withDefault("best").mapValidated(s => Validated.fromOption(SortBy.parse(s), cats.data.NonEmptyList.one(s"--sort must be best, ratio, efficiency or simplicity, got '$s'")))
 
   private def teeth(minLabel: String, maxLabel: String, b: (Int, Int)): ValidatedNel[String, TeethBounds] =
     val (lo, hi) = b
@@ -92,9 +96,10 @@ object Search:
       sun: (Int, Int), planet: (Int, Int), ring: (Int, Int), planets: (Int, Int),
       od: Double, minModule: Double, ringWall: Double, clearance: Double, spf: Double,
       targets: List[Double], top: Int,
-      csv: Option[Path], json: Option[Path], scad: Option[Path], noTable: Boolean)
+      csv: Option[Path], json: Option[Path], scad: Option[Path], noTable: Boolean,
+      phased: Boolean, sort: SortBy)
 
-  private final case class Run(cfg: SearchConfig, csv: Option[Path], json: Option[Path], scad: Option[Path], noTable: Boolean)
+  private final case class Run(cfg: SearchConfig, sort: SortBy, csv: Option[Path], json: Option[Path], scad: Option[Path], noTable: Boolean)
 
   private def validate(r: Raw): ValidatedNel[String, Run] =
     (
@@ -124,26 +129,30 @@ object Search:
           targets         = ts,
           topPerTarget    = r.top,
           ringWall        = wall,
-          planetClearance = clr
+          planetClearance = clr,
+          phasedPinions   = r.phased
         ),
-        r.csv, r.json, r.scad, r.noTable)
+        r.sort, r.csv, r.json, r.scad, r.noTable)
     }
 
   val command: Opts[Unit] = (
     (modeOpt, sunlessOpt, bounds("sun", 8, 80), bounds("planet", 8, 20), bounds("ring", 40, 200), planets).tupled,
     (firstStageOD, minModule, ringWall, planetClear, sunPlanet, targets, topK).tupled,
-    (csvOut, jsonOut, scadOut, noTable).tupled
-  ).mapN { case ((mode, sunless, sun, planet, ring, pl), (od, mm, wall, clr, spf, ts, top), (csv, json, scad, noTbl)) =>
-    Raw(mode, sunless, sun, planet, ring, pl, od, mm, wall, clr, spf, ts, top, csv, json, scad, noTbl)
+    (csvOut, jsonOut, scadOut, noTable, phased, sortOpt).tupled
+  ).mapN { case ((mode, sunless, sun, planet, ring, pl), (od, mm, wall, clr, spf, ts, top), (csv, json, scad, noTbl, ph, srt)) =>
+    Raw(mode, sunless, sun, planet, ring, pl, od, mm, wall, clr, spf, ts, top, csv, json, scad, noTbl, ph, srt)
   }.mapValidated(validate).map { run =>
     val cfg = run.cfg
     val top = cfg.topPerTarget
 
+    // One engine run: per-target top-K for the default ranking with targets,
+    // otherwise the overall top-K by the chosen ranking.
+    val engine = Calculator.engine(cfg, run.sort, top).run()
     val designs =
-      if cfg.targets.isEmpty then Calculator.search(cfg).take(top).toVector
-      else
-        val best = Calculator.best(cfg)
-        cfg.targets.flatMap(t => best.getOrElse(t, Vector.empty).map(_.design)).toVector
+      if cfg.targets.nonEmpty && run.sort == SortBy.BestFit then
+        val best = engine.perTarget
+        cfg.targets.distinct.flatMap(t => best.getOrElse(t, Vector.empty).map(_.design)).toVector
+      else engine.top
 
     // The table uses box-drawing characters; the JVM's default stdout charset on Windows is a legacy code page.
     val out = new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8)
