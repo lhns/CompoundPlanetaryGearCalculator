@@ -30,11 +30,13 @@ sbt "cli/run --target 53.12 --max-sun 80 --max-planet 20 --top 10"
 
 Useful flags:
 
-- `--mode standard|cdcp|nss|single`
+- `--mode standard|cdcp|nss|single`; `--sunless 1|2|both` removes a stage's sun gear (`--mode cdcp --sunless both` is a carrier-driven compound with no sun gears)
 - `--min-sun / --max-sun`, `--min-planet / --max-planet`, `--min-ring / --max-ring`
 - `--min-planets / --max-planets`
 - `--target <ratio>` (repeatable)
-- `--od <mm>`  first-stage outer diameter
+- `--od <mm>`  first-stage ring outer diameter, `--ring-wall <mm>`, `--planet-clearance <modules>`
+- `--sort best|ratio|efficiency|simplicity` ranking (default: closest to the targets, or smallest ratio without targets)
+- `--phased-pinions`  stacked planets cut with a planet-specific twist (drops the identical-pinion assembly rule, ADR 0018)
 - `--min-module <mm/tooth>`
 - `--csv out.csv` / `--json out.json` / `--scad design.scad`
 

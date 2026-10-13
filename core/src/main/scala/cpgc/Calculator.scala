@@ -2,55 +2,31 @@ package cpgc
 
 import cpgc.constraints.SearchConfig
 import cpgc.domain.{CompoundDesign, Ratio}
-import cpgc.search.{Compounder, Enumerator, Scorer, SearchSteps}
+import cpgc.search.{Scorer, SearchEngine, SearchSteps}
+import cpgc.search.Scorer.SortBy
 
+/** Thin wrappers over the one search engine (ADR 0017). */
 object Calculator:
 
-  /** Step-grained iterator over the same candidate space as `search` /
-    * `searchTargeted`. Each `next()` does one unit of work, returning
-    * `Some(design)` when a step emits or `None` when it only advances state.
-    * Use this when bounded per-step latency matters (browser chunk loops,
-    * cancellation between deadline checks). See `cpgc.search.SearchSteps`.
-    */
+  /** Step-grained iterator over every valid design. Each `next()` does one unit
+    * of work, returning `Some(design)` when it accepted a candidate or `None`
+    * when it only advanced state. See `cpgc.search.SearchSteps`. */
   def searchSteps(cfg: SearchConfig): Iterator[Option[CompoundDesign]] =
     SearchSteps.forConfig(cfg)
 
-  /** Lazy stream of all valid designs implied by `cfg.topology`. Stage 1 is
-    * drawn from the stage-1 pool and stage 2 from the stage-2 pool (they differ
-    * when only one stage has a sun). Spacing, stacking and module rules are
-    * applied inside `Compounder`. */
+  /** Lazy stream of every valid design implied by `cfg` (enumeration order). */
   def search(cfg: SearchConfig): LazyList[CompoundDesign] =
-    if cfg.topology.stages == 1 then
-      Enumerator.stage1Sets(cfg).flatMap(Compounder.single(cfg, _))
-    else
-      val pool1   = Enumerator.stage1Sets(cfg).toVector
-      val samePool = cfg.topology.s1Present == cfg.topology.s2Present
-      val pool2   = if samePool then pool1 else Enumerator.stage2Sets(cfg).toVector
-      for
-        a <- pool1.to(LazyList)
-        b <- pool2.to(LazyList)
-        if !(samePool && a == b)
-        d <- Compounder.compound(cfg, a, b)
-      yield d
+    LazyList.from(SearchSteps.forConfig(cfg)).flatten
 
-  /** Targeted compound search using the inverse-solver fast path. For each
-    * stage-1 candidate, derive stage-2 candidates whose ratio is close to each
-    * target (`Compounder.stage2For`). Faster than the full pair enumeration but
-    * not complete (bug register B4; replaced in milestone B).
-    */
-  def searchTargeted(cfg: SearchConfig): LazyList[CompoundDesign] =
-    if cfg.topology.stages == 1 || cfg.targets.isEmpty then search(cfg)
-    else
-      val stage1s = Enumerator.stage1Sets(cfg).toVector
-      val targets = cfg.targets.map(_.value)
-      for
-        a <- stage1s.to(LazyList)
-        t <- targets.to(LazyList)
-        b <- Compounder.stage2For(t, a, cfg).to(LazyList)
-        d <- Compounder.compound(cfg, a, b)
-      yield d
+  /** The engine for `cfg`, to be driven in chunks (`step`) or run to completion. */
+  def engine(cfg: SearchConfig, sortBy: SortBy = SortBy.BestFit, k: Int = 10): SearchEngine =
+    new SearchEngine(cfg, sortBy, k)
 
-  /** Top-K designs per target ratio. */
+  /** The `k` best designs by `sortBy` over the whole space, best first. */
+  def top(cfg: SearchConfig, sortBy: SortBy = SortBy.BestFit, k: Int = 10): Vector[CompoundDesign] =
+    engine(cfg, sortBy, k).run().top
+
+  /** Top `cfg.topPerTarget` designs per target ratio (empty without targets). */
   def best(cfg: SearchConfig): Map[Ratio, Vector[Scorer.Scored]] =
-    val stream = if cfg.targets.nonEmpty then searchTargeted(cfg) else search(cfg)
-    Scorer.topPerTarget(stream, cfg.targets, cfg.topPerTarget)
+    if cfg.targets.isEmpty then Map.empty
+    else engine(cfg, SortBy.BestFit, cfg.topPerTarget).run().perTarget

@@ -27,3 +27,15 @@ quadratics in `Tr2`, so no exact closed-form inverse exists for arbitrary coupli
 ## Consequences
 - Targeted and untargeted searches return the same designs; only ranking differs.
 - Wide ranges cost time, not correctness; the UI states when results are truncated.
+
+## Implementation (milestone B)
+- `PairSearch` is the one enumeration: per-stage pools, stages failing their own sum rule dropped before
+  pairing, equal-N pairing for stacked topologies, identical pairs included. `SearchSteps.forConfig` and
+  `SearchEngine` are both views of it. `Compounder.Evaluator` does the cheap rejects (stacking, sum rule,
+  ADR 0018 cross term, modules) and then solves with a reusable `RoleSolver.Workspace`, so the hot path
+  allocates nothing; a `CompoundDesign` is built only for candidates that enter a top-K.
+- `SearchEngine(cfg, sortBy, k)`: `step(units)` returns true when done, `top` / `perTarget` are snapshots,
+  `stop()` + `truncated` report "best so far", `examined` / `found` count work. `Calculator.search`, `best`,
+  `top` and the CLI are wrappers. Without targets, `BestFit` ranks by `|ratio|`.
+- Measured on the JVM (`PerformanceDiag`): CLI defaults 0.2-2.1 s (worst: sun-less CDCP, 8.5 M pairs); web
+  default ranges 0.02-0.13 s for all seven presets.

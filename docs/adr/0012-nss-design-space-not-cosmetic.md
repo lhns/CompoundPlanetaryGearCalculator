@@ -1,7 +1,7 @@
 # ADR 0012 — NSS is a design-space expansion via dropping the stage-2 spacing requirement
 
 ## Status
-Accepted. Supersedes the original 0012 (whose math was wrong and whose framing of two competing spacing conditions was incorrect).
+Accepted; its spacing table is superseded by [ADR 0015](0015-topology-single-source-of-truth.md) §5 and, for stacked planets, [ADR 0018](0018-stacked-planet-assembly-condition.md). Supersedes the original 0012 (whose math was wrong and whose framing of two competing spacing conditions was incorrect).
 
 ## Context
 

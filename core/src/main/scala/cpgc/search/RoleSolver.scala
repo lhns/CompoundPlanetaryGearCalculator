@@ -23,6 +23,10 @@ import cpgc.domain.{GearSet, Ratio}
   * `3 + 1` unknowns and `2 + 2` rows. The counts match for every legal
   * topology, so the system is square. A degenerate tuple gives a singular
   * system and `None`; the solver is total and never throws.
+  *
+  * The search hot path uses a `Workspace`, which owns the matrix and
+  * right-hand-side arrays and reuses them for every solve (no allocation per
+  * call). The functions below create a throw-away workspace per call.
   */
 object RoleSolver:
 
@@ -39,6 +43,80 @@ object RoleSolver:
     /** Stage-2 carrier velocity, falling back to C1 for a single stage. */
     def omegaC2OrC1: Double = if values.contains(Body.C2) then get(Body.C2) else get(Body.C1)
 
+  /** Reusable solver state for one topology. Not thread-safe: use one per
+    * thread / per search. After a successful `solve`, `x(i)` reads the
+    * solution and `minPivot` the smallest pivot. */
+  final class Workspace(t: Topology):
+    private val compound = t.stages == 2
+    private val n   = t.unknowns
+    private val m   = new Array[Double](n * n)
+    private val r   = new Array[Double](n)
+    private val sl  = t.bodySlot
+    private val s1S = sl(Body.S1.ordinal); private val r1S = sl(Body.R1.ordinal); private val c1S = sl(Body.C1.ordinal)
+    private val s2S = sl(Body.S2.ordinal); private val r2S = sl(Body.R2.ordinal); private val c2S = sl(Body.C2.ordinal)
+    // Coupling rows: columns of the +1 and -1 entries.
+    private val cpA = Array(couplingCol(t.firstCoupling, true), couplingCol(t.secondCoupling, true))
+    private val cpB = Array(couplingCol(t.firstCoupling, false), couplingCol(t.secondCoupling, false))
+    private val inSlot  = sl(t.input.ordinal)
+    private val fixSlot = sl(t.fixed.ordinal)
+    private val outSlot = sl(t.output.ordinal)
+    private var pivot = 0.0
+
+    private def couplingCol(c: Coupling, first: Boolean): Int =
+      if !compound then -1
+      else if c == Coupling.PlanetStack then (if first then t.p1Slot else t.p2Slot)
+      else
+        val (a, b) = Coupling.bodyPair(c).get
+        sl((if first then a else b).ordinal)
+
+    /** Solve for `omegaIn` at the Input body and 0 at the Fixed body. `g2` is
+      * ignored for a single stage; `null` for a compound makes this return
+      * false. Returns false for a singular system. */
+    def solve(g1: GearSet, g2: GearSet, omegaIn: Double): Boolean =
+      if compound && g2 == null then return false
+      java.util.Arrays.fill(m, 0.0)
+      java.util.Arrays.fill(r, 0.0)
+      var row = mesh(0, s1S, r1S, c1S, t.p1Slot, g1)
+      if compound then
+        row = mesh(row, s2S, r2S, c2S, t.p2Slot, g2)
+        var k = 0
+        while k < 2 do
+          m(row * n + cpA(k)) = 1.0
+          m(row * n + cpB(k)) = -1.0
+          row += 1
+          k += 1
+      m(row * n + inSlot) = 1.0
+      r(row) = omegaIn
+      row += 1
+      m(row * n + fixSlot) = 1.0
+      row += 1
+      if row != n then return false // unreachable for a legal Topology; stay total
+      pivot = LinAlg.solveFlat(m, r, n)
+      pivot >= 0.0
+
+    /** Mesh rows of one stage starting at `row0`; returns the next free row. */
+    private def mesh(row0: Int, sunSlot: Int, ringSlot: Int, carrierSlot: Int, planetSlot: Int, g: GearSet): Int =
+      val ts = g.sun.toDouble; val tp = g.planet.toDouble; val tr = g.ring.toDouble
+      var row = row0
+      if sunSlot >= 0 then
+        m(row * n + sunSlot)     = ts
+        m(row * n + planetSlot)  = tp
+        m(row * n + carrierSlot) = -(ts + tp)
+        row += 1
+      m(row * n + ringSlot)    = tr
+      m(row * n + planetSlot)  = -tp
+      m(row * n + carrierSlot) = tp - tr
+      row + 1
+
+    def x(slot: Int): Double = r(slot)
+    def output: Double = r(outSlot)
+    def minPivot: Double = pivot
+
+    /** Ratio `1 / ω_out` after a successful solve, or NaN for a vanishing output. */
+    def ratioOrNaN: Double =
+      val out = r(outSlot)
+      if math.abs(out) >= 1e-15 then 1.0 / out else Double.NaN
+
   /** Solve for every velocity given `omegaIn` at the Input body and 0 at the
     * Fixed body. `None` when the system is singular or a compound is given no
     * stage-2 gear set. */
@@ -53,100 +131,30 @@ object RoleSolver:
   def velocitiesDetailed(
       topology: Topology, stage1: GearSet, stage2: Option[GearSet], omegaIn: Double
   ): Option[(Velocities, Double)] =
-    val x = solveRaw(topology, stage1, stage2, omegaIn)
-    if x == null then None
+    val w = new Workspace(topology)
+    if !w.solve(stage1, stage2.orNull, omegaIn) then None
     else
-      val n = topology.unknowns
-      val vals = topology.presentBodies.iterator.map(b => b -> x(topology.bodySlot(b.ordinal))).toMap
-      val p1 = x(topology.p1Slot)
-      val p2 = if topology.p2Slot >= 0 then x(topology.p2Slot) else p1
-      Some((Velocities(vals, p1, p2), x(n)))
+      val vals = topology.presentBodies.iterator.map(b => b -> w.x(topology.bodySlot(b.ordinal))).toMap
+      val p1 = w.x(topology.p1Slot)
+      val p2 = if topology.p2Slot >= 0 then w.x(topology.p2Slot) else p1
+      Some((Velocities(vals, p1, p2), w.minPivot))
 
   /** Forward ratio `ω_in / ω_out`. `None` for a singular system or a vanishing
     * output velocity (infinite reduction). */
   def ratio(topology: Topology, stage1: GearSet, stage2: Option[GearSet]): Option[Ratio] =
-    val x = solveRaw(topology, stage1, stage2, 1.0)
-    if x == null then None
+    val w = new Workspace(topology)
+    if !w.solve(stage1, stage2.orNull, 1.0) then None
     else
-      val out = x(topology.bodySlot(topology.output.ordinal))
-      if math.abs(out) >= 1e-15 then Some(Ratio.unsafe(1.0 / out)) else None
+      val q = w.ratioOrNaN
+      if q.isNaN then None else Some(Ratio.unsafe(q))
 
   /** Ratio + a flag saying whether the elimination was well-conditioned
     * (smallest pivot >= 1e-6; otherwise the value may be numerically noisy). */
   def ratioWithConditioning(
       topology: Topology, stage1: GearSet, stage2: Option[GearSet]
   ): Option[(Ratio, Boolean)] =
-    val x = solveRaw(topology, stage1, stage2, 1.0)
-    if x == null then None
+    val w = new Workspace(topology)
+    if !w.solve(stage1, stage2.orNull, 1.0) then None
     else
-      val out = x(topology.bodySlot(topology.output.ordinal))
-      if math.abs(out) >= 1e-15 then Some((Ratio.unsafe(1.0 / out), x(topology.unknowns) >= 1e-6))
-      else None
-
-  /** Assemble and solve. Returns the solution vector (length `unknowns + 1`,
-    * the last element being the smallest pivot) or `null` when unsolvable. Two
-    * array allocations per call; no maps. */
-  private def solveRaw(
-      t: Topology, g1: GearSet, g2: Option[GearSet], omegaIn: Double
-  ): Array[Double] =
-    val compound = t.stages == 2
-    if compound && g2.isEmpty then return null
-    val n   = t.unknowns
-    val m   = new Array[Double](n * n)
-    val r   = new Array[Double](n + 1)
-    val sl  = t.bodySlot
-
-    var row = meshRows(m, n, 0, sl(Body.S1.ordinal), sl(Body.R1.ordinal), sl(Body.C1.ordinal), t.p1Slot,
-      g1.sun.toDouble, g1.planet.toDouble, g1.ring.toDouble)
-
-    if compound then
-      val s2 = g2.get
-      row = meshRows(m, n, row, sl(Body.S2.ordinal), sl(Body.R2.ordinal), sl(Body.C2.ordinal), t.p2Slot,
-        s2.sun.toDouble, s2.planet.toDouble, s2.ring.toDouble)
-      row = couplingRow(m, n, row, t.firstCoupling, t)
-      row = couplingRow(m, n, row, t.secondCoupling, t)
-
-    m(row * n + sl(t.input.ordinal)) = 1.0
-    r(row) = omegaIn
-    row += 1
-    m(row * n + sl(t.fixed.ordinal)) = 1.0
-    row += 1
-
-    // Unreachable for a Topology that passed its invariants; stay total anyway.
-    if row != n then return null
-    val minPivot = LinAlg.solveFlat(m, r, n)
-    if minPivot < 0.0 then null
-    else
-      r(n) = minPivot
-      r
-
-  /** Mesh rows of one stage starting at `row0`; returns the next free row.
-    * `sunSlot < 0` means the sun is absent (no sun mesh). */
-  private def meshRows(
-      m: Array[Double], n: Int, row0: Int,
-      sunSlot: Int, ringSlot: Int, carrierSlot: Int, planetSlot: Int,
-      ts: Double, tp: Double, tr: Double
-  ): Int =
-    var row = row0
-    if sunSlot >= 0 then
-      m(row * n + sunSlot)     = ts
-      m(row * n + planetSlot)  = tp
-      m(row * n + carrierSlot) = -(ts + tp)
-      row += 1
-    m(row * n + ringSlot)    = tr
-    m(row * n + planetSlot)  = -tp
-    m(row * n + carrierSlot) = tp - tr
-    row + 1
-
-  /** One coupling row: `PlanetStack` is `ωP1 − ωP2 = 0`, any other coupling a
-    * plain weld of its body pair. */
-  private def couplingRow(m: Array[Double], n: Int, row: Int, c: Coupling, t: Topology): Int =
-    c match
-      case Coupling.PlanetStack =>
-        m(row * n + t.p1Slot) = 1.0
-        m(row * n + t.p2Slot) = -1.0
-      case other =>
-        val (a, b) = Coupling.bodyPair(other).get
-        m(row * n + t.bodySlot(a.ordinal)) = 1.0
-        m(row * n + t.bodySlot(b.ordinal)) = -1.0
-    row + 1
+      val q = w.ratioOrNaN
+      if q.isNaN then None else Some((Ratio.unsafe(q), w.minPivot >= 1e-6))

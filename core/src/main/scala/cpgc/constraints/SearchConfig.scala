@@ -27,7 +27,10 @@ final case class SearchConfig(
     targets: Seq[Ratio] = Seq.empty,
     topPerTarget: Int = 10,
     ringWall: Double = SearchConfig.DefaultRingWall,
-    planetClearance: Double = SearchConfig.DefaultPlanetClearance
+    planetClearance: Double = SearchConfig.DefaultPlanetClearance,
+    /** ADR 0018: stacked planets may be cut with a planet-specific twist (N different
+      * planet parts). Drops the identical-pinion cross term of the assembly rule. */
+    phasedPinions: Boolean = false
 )
 
 object SearchConfig:

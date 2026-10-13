@@ -80,24 +80,3 @@ class CoupledForwardSpec extends FunSuite:
     val rRS = RoleSolver.ratio(topology(Coupling.RingToSun), s1, Some(s2)).get.value
     assert(math.abs(rPS - rRS) > 0.01, s"ratios should differ: PS=$rPS RS=$rRS")
   }
-
-  test("RingToSun closed-form stage2For round-trips to the target ratio") {
-    import cpgc.constraints.{SearchConfig, TeethBounds}
-    import cpgc.domain.Ratio
-    val cfg = SearchConfig(
-      topology    = topology(Coupling.RingToSun),
-      sunTeeth    = TeethBounds(8, 80),
-      planetTeeth = TeethBounds(8, 30),
-      ringTeeth   = TeethBounds(20, 120),
-      planets     = TeethBounds(3, 5),
-      targets     = Seq(Ratio(2.5))
-    )
-    val candidates = Compounder.stage2For(2.5, s1, cfg).toVector
-    assert(candidates.nonEmpty, "RingToSun closed-form should return at least one candidate")
-    // Verify each candidate produces a ratio near the target.
-    val ratios = candidates.flatMap(s2c =>
-      RoleSolver.ratio(topology(Coupling.RingToSun), s1, Some(s2c)).map(_.value)
-    )
-    assert(ratios.exists(r => math.abs(r - 2.5) < 0.2),
-      s"no candidate close to target 2.5; got: ${ratios.mkString(", ")}")
-  }

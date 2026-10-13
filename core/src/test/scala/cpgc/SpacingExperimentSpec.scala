@@ -4,20 +4,20 @@ import cpgc.render.GearGeometry
 import cpgc.render.GearGeometry.{planetPhaseOffset, polygonOutlineRadius}
 import munit.FunSuite
 
-/** ⚠ DIAGNOSTIC ONLY — the residuals printed here DO NOT measure physical
-  *   assemblability. Earlier conclusions ("design A fails compound coupling")
-  *   were wrong: the spec misuses `GearGeometry.planetPhaseOffset` as if it
-  *   returned a planet's physical body rotation, but that helper actually
-  *   returns the SHORTEST visual rotation (wrapped to `[-π/Tp, π/Tp]`) used
-  *   by the schematic to render each planet's mesh in isolation. Differences
-  *   between wrapped per-planet visual offsets are not physical inter-planet
-  *   rotation increments. The non-zero residuals at planets 1..N-1 are
-  *   artefacts of that misuse, not signals that the designs are
-  *   non-assemblable.
+/** ⚠ DIAGNOSTIC ONLY. The residuals printed here are real: a non-zero residual
+  *   at planets 1..N-1 means the design cannot be assembled with identical
+  *   stepped planets. (An earlier version of this header called them artefacts
+  *   of misusing `GearGeometry.planetPhaseOffset`; that was wrong. They are the
+  *   cross term of ADR 0018, `((Tp1·Tr2 − Tp2·Tr1) / gcd(Tp1, Tp2)) % N == 0`,
+  *   which the old `(S + R) % N` rule missed. Design B below, the NSS winner,
+  *   fails it; design A, the Standard winner, passes.)
   *
-  *   The spec is retained because the printed values are useful for visual
-  *   inspection of the per-planet phase fits the renderer applies; do not
-  *   read pass/fail of compound assembly from these numbers.
+  *   The exact tooth-phase oracle is `verify/AssemblyOracle.scala`, checked in
+  *   `AssemblyConditionSpec`; derivation in
+  *   `docs/verification/assembly-conditions.md`. This spec is kept as a visual
+  *   probe of the per-planet fits the renderer applies, via
+  *   `GearGeometry.planetPhaseOffset`, which returns the shortest visual
+  *   rotation (wrapped to `[-π/Tp, π/Tp]`), not a planet's physical rotation.
   *
   * Empirical probe of whether the two specific designs the user observed are
   * actually assemblable under each topology.

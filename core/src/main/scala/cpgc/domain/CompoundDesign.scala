@@ -14,5 +14,7 @@ final case class CompoundDesign(
     profileShiftHint: Option[ProfileShift],
     validity: Validity = Validity.Ok
 ):
-  /** "Standard" / "CDCP" / "NSS" / "SingleStage" for canonical topologies, else "Custom". */
-  def modeName: String = topology.legacyMode.fold("Custom")(_.toString)
+  /** "Standard" / "CDCP" / "NSS" / "SingleStage" for canonical topologies,
+    * "CDCP (sun-less)" for the sun-less CDCP, else "Custom". */
+  def modeName: String =
+    topology.legacyMode.fold(if topology == Topology.sunlessCdcpCompound then "CDCP (sun-less)" else "Custom")(_.toString)

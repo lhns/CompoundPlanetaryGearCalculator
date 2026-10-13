@@ -10,19 +10,18 @@ import munit.FunSuite
 import scala.collection.mutable
 import scala.util.Random
 
-/** Per-design contract: every design emitted by `search` / `searchTargeted` /
+/** Per-design contract: every design emitted by `search` / the engine /
   * `searchSteps` must satisfy the intended invariants, for each topology built
   * the way the product builds configs (see `ContractSupport.Case`).
   *
-  * One test per (case, path, category) so an expected-failure marker (`.fail`)
-  * only masks the category it documents. Known production bugs are listed in
-  * `known`; when one is fixed munit flags the `.fail` test as passing.
+  * One test per (case, path, category) so a failure names the violated category.
+  * There are no known failures any more (B2-B5 fixed in milestone A, B4 in B).
   */
 class DesignContractSpec extends FunSuite:
 
   private val Tol      = 1e-9
   private val NConfigs = 14
-  private val paths    = Vector("search", "targeted", "steps")
+  private val paths    = Vector("search", "engine", "steps")
   private val cats     = Vector("ratio", "teeth", "geometry", "spacing", "module", "stacked", "efficiency", "single")
 
   private final case class Violation(cat: String, msg: String)
@@ -30,7 +29,7 @@ class DesignContractSpec extends FunSuite:
 
   private def run(path: String, cfg: SearchConfig): Vector[CompoundDesign] = path match
     case "search"   => Calculator.search(cfg).toVector
-    case "targeted" => Calculator.searchTargeted(cfg).toVector
+    case "engine"   => Calculator.engine(cfg, cpgc.search.Scorer.SortBy.Ratio, Int.MaxValue).run().top
     case "steps"    => Calculator.searchSteps(cfg).flatten.toVector
 
   private def check(cfg: SearchConfig, d: CompoundDesign): Vector[Violation] =
@@ -73,7 +72,7 @@ class DesignContractSpec extends FunSuite:
     }
 
     // spacing
-    if !specSpacingOk(t, s1, d.stage2.map(_.set)) then v("spacing", "violates intended spacing rule")
+    if !specSpacingOk(t, cfg.phasedPinions, s1, d.stage2.map(_.set)) then v("spacing", "violates intended spacing rule")
 
     // modules
     specModule1(cfg, s1) match
@@ -121,12 +120,6 @@ class DesignContractSpec extends FunSuite:
       Outcome(count, viol.toMap)
     })
 
-  /** (case, path, category) -> (bug id, observed). Only real production bugs.
-    * Empty since milestone A: B3 (single-stage custom roles), B5 (stacking read
-    * only the second coupling) and the CDCP closed-form sun-range skip (a B4
-    * facet) are fixed. */
-  private val known: Map[(String, String, String), (String, String)] = Map.empty
-
   for
     c    <- cases
     path <- paths
@@ -139,9 +132,7 @@ class DesignContractSpec extends FunSuite:
       def body(): Unit =
         val vs = outcome(c, path).violations.getOrElse(cat, Vector.empty)
         assert(vs.isEmpty, vs.mkString("\n"))
-      known.get((c.name, path, cat)) match
-        case Some((id, _)) => test(s"$id $name0".fail)(body())   // observed: see `known`
-        case None          => test(name0)(body())
+      test(name0)(body())
 
   test("design.topology is the config's topology and modeName names the legacy alias") {
     for c <- cases do
