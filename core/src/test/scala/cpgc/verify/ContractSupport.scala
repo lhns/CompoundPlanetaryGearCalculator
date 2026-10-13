@@ -65,10 +65,18 @@ object ContractSupport:
   def stacked(t: Topology): Boolean =
     t.stages == 2 && (t.firstCoupling == PlanetStack || t.secondCoupling == PlanetStack)
 
-  /** The intended spacing rule (ADR 0015 §5): every stage whose sun is present
-    * needs `(S + R) % N == 0`; a sun-less stage has no condition. */
-  def specSpacingOk(t: Topology, s1: GearSet, s2: Option[GearSet]): Boolean =
-    (!t.sunPresent(1) || s1.evenSpacing) && s2.forall(g => !t.sunPresent(2) || g.evenSpacing)
+  private def gcd(a: Int, b: Int): Int = if b == 0 then math.abs(a) else gcd(b, a % b)
+
+  /** The intended assembly rule (ADR 0015 §5, ADR 0018): every stage whose sun
+    * is present needs `(S + R) % N == 0`; a sun-less stage has no such
+    * condition; stacked identical pinions (`phased = false`) also need
+    * `((Tp1·Tr2 − Tp2·Tr1) / gcd(Tp1, Tp2)) % N == 0`. */
+  def specSpacingOk(t: Topology, phased: Boolean, s1: GearSet, s2: Option[GearSet]): Boolean =
+    (!t.sunPresent(1) || s1.evenSpacing) && s2.forall(g => !t.sunPresent(2) || g.evenSpacing) &&
+      (phased || !stacked(t) || s2.forall { g =>
+        val p1 = s1.planet.toInt; val p2 = g.planet.toInt
+        ((p1 * g.ring.toInt - p2 * s1.ring.toInt) / gcd(p1, p2)) % s1.numPlanets == 0
+      })
 
   /** Intended first-stage module (ADR 0016), `None` when not positive finite. */
   def specModule1(cfg: SearchConfig, s1: GearSet): Option[Double] =
@@ -102,13 +110,14 @@ object ContractSupport:
       firstStageOD = Vector(60.0, 100.0, 150.0)(rng.nextInt(3)),
       sunPlanetFactor = Vector(2.0, 3.0)(rng.nextInt(2)),
       targets = targets,
-      topPerTarget = 5
+      topPerTarget = 5,
+      phasedPinions = rng.nextInt(3) == 0
     )
 
   def cfgSummary(c: SearchConfig): String =
     s"sun=${c.sunTeeth.min}..${c.sunTeeth.max} planet=${c.planetTeeth.min}..${c.planetTeeth.max} " +
       s"ring=${c.ringTeeth.min}..${c.ringTeeth.max} N=${c.planets.min}..${c.planets.max} " +
-      s"minMod=${c.minModule} OD=${c.firstStageOD} wall=${c.ringWall} clr=${c.planetClearance} spf=${c.sunPlanetFactor} " +
+      s"phased=${c.phasedPinions} minMod=${c.minModule} OD=${c.firstStageOD} wall=${c.ringWall} clr=${c.planetClearance} spf=${c.sunPlanetFactor} " +
       s"targets=${c.targets.map(_.value)}"
 
   type Key = (Int, Int, Int, Int, Int, Int, Int)
@@ -137,7 +146,7 @@ object ContractSupport:
     if t.stages == 1 then
       for
         a <- pool1
-        if specSpacingOk(t, a, None)
+        if specSpacingOk(t, cfg.phasedPinions, a, None)
         m1 <- specModule1(cfg, a).toVector
         if modOk(m1)
         r <- RoleSolver.ratio(t, a, None).toVector
@@ -148,7 +157,7 @@ object ContractSupport:
         a <- pool1
         b <- pool2
         if !stacked(t) || a.numPlanets == b.numPlanets
-        if specSpacingOk(t, a, Some(b))
+        if specSpacingOk(t, cfg.phasedPinions, a, Some(b))
         m1 <- specModule1(cfg, a).toVector
         m2 = if stacked(t) then m1 * (a.sun.toInt + a.planet.toInt).toDouble / (b.sun.toInt + b.planet.toInt) else m1
         if modOk(m1) && modOk(m2)

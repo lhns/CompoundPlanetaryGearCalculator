@@ -99,19 +99,3 @@ class NssSearchSpec extends FunSuite:
     val effNss = Efficiency.overall(Topology.nssCompound)
     assert(effNss > effStd, s"NSS efficiency ($effNss) should exceed Standard ($effStd)")
   }
-
-  test("NSS targeted inverse solver returns designs near the target ratio") {
-    val cfg = baseCfg.copy(
-      topology    = Topology.fromMode(Mode.NSS),
-      targets = Seq(Ratio(40.0))
-    )
-    // Stage 1 must pass single-stage Willis: pick (24,12,3) → R=48, (24+48)%3=0 ✓.
-    val s1 = GearSet(Teeth(24), Teeth(12), 3)
-    val nssCandidates = Compounder.stage2For(40.0, s1, cfg).toVector
-    if nssCandidates.isEmpty then
-      val relaxed = cfg.copy(ringTeeth = TeethBounds(20, 200))
-      val again   = Compounder.stage2For(40.0, s1, relaxed).toVector
-      assert(again.nonEmpty, "NSS inverse solver returned nothing even with relaxed bounds")
-    else
-      assert(nssCandidates.nonEmpty)
-  }

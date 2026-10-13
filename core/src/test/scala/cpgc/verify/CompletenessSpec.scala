@@ -13,15 +13,13 @@ import munit.FunSuite
   * (multiset, 1e-9), not design identity, so ties are not an issue.
   *
   * Targets are derived per topology from the reference ratios so they sit
-  * inside the reachable range (otherwise the novel-topology brute-force
-  * window would trivially return nothing).
+  * inside the reachable range.
   *
   * Kinds (chosen so a failure can be attributed):
-  *   - `sort(search)`            exhaustive stream + Scorer.sort dedup      -> B6, and any search/reference divergence
-  *   - `searchTargeted best`     closest design found by the targeted path   -> B4 (+ divergences)
-  *   - `searchTargeted best, positive-ratio designs only` same, ignoring negative-ratio designs -> isolates the sign bug
-  *   - `Scorer.sort(searchSteps)`                                            -> B4/B6
-  *   - `best()`                  Calculator.best                              -> B1 + the above
+  *   - `sort(search)`            exhaustive stream + Scorer.sort dedup
+  *   - `Scorer.sort(searchSteps)` the step iterator + Scorer.sort dedup
+  *   - `engine top-K`            the bounded accumulator, overall best fit
+  *   - `best()`                  Calculator.best (per-target top-K)
   */
 class CompletenessSpec extends FunSuite:
 
@@ -44,8 +42,6 @@ class CompletenessSpec extends FunSuite:
     assertEquals(actual.size, expected.size, s"count differs: $clue\n actual=$actual\n expected=$expected")
     actual.zip(expected).foreach((a, e) => assertEqualsDouble(a, e, 1e-9, s"$clue\n actual=$actual\n expected=$expected"))
 
-  private val known = CompletenessKnown.table
-
   for c <- cases do
     val baseCfg = c.config(bounded(Nil))
     lazy val ref = referenceDesigns(baseCfg)
@@ -64,10 +60,7 @@ class CompletenessSpec extends FunSuite:
       def refTop: Vector[Double] = ref.map((_, _, r) => ts.map(err(_, r)).min).sorted.take(K)
 
       def reg(kind: String)(body: => Unit): Unit =
-        val name = s"completeness[${c.name}/targets#$ti/$kind]"
-        known.get((c.name, ti, kind)) match
-          case Some(id) => test(s"$id $name".fail)(body)
-          case None     => test(name)(body)
+        test(s"completeness[${c.name}/targets#$ti/$kind]")(body)
 
       reg("sort(search) top-K") {
         val ds  = Calculator.search(cfg).toVector
@@ -75,24 +68,9 @@ class CompletenessSpec extends FunSuite:
         assertErrors(top.map(d => Scorer.bestTargetError(cfg.targets, d.ratio)), refTop, s"sort(search) ${cfgSummary(cfg)}")
       }
 
-      reg("searchTargeted best error") {
-        val ds = Calculator.searchTargeted(cfg).toVector
-        ts.foreach { t =>
-          val expected = ref.map((_, _, r) => err(t, r)).min
-          val got      = if ds.isEmpty then Double.PositiveInfinity else ds.map(d => err(t, d.ratio.value)).min
-          assertEqualsDouble(got, expected, 1e-9, s"searchTargeted best for target $t ${cfgSummary(cfg)}")
-        }
-      }
-
-      reg("searchTargeted best error, positive-ratio designs only") {
-        val ds = Calculator.searchTargeted(cfg).toVector
-        ts.foreach { t =>
-          val pos = ref.filter(_._3 > 0).map((_, _, r) => err(t, r))
-          assume(pos.nonEmpty, "no positive-ratio designs")
-          val got = if ds.isEmpty then Double.PositiveInfinity else ds.map(d => err(t, d.ratio.value)).min
-          // searchTargeted may return a better (negative-ratio) design; it must not be worse.
-          assert(got <= pos.min + 1e-9, s"searchTargeted best $got worse than positive-only best ${pos.min} for target $t ${cfgSummary(cfg)}")
-        }
+      reg("engine top-K") {
+        val top = Calculator.engine(cfg, Scorer.SortBy.BestFit, K).run().top
+        assertErrors(top.map(d => Scorer.bestTargetError(cfg.targets, d.ratio)), refTop, s"engine ${cfgSummary(cfg)}")
       }
 
       reg("Scorer.sort(searchSteps) top-K") {
@@ -114,8 +92,7 @@ class CompletenessSpec extends FunSuite:
   private def sampleDesigns(n: Int): Vector[CompoundDesign] =
     Calculator.search(bounded(Nil)).take(n).toVector
 
-  // Observed: topPerTarget keeps the first-seen k designs instead of the k closest.
-  test("B1 topPerTarget keeps the k smallest errors".fail) {
+  test("B1 topPerTarget keeps the k smallest errors") {
     val ds     = sampleDesigns(300)
     val target = Ratio(12.5)
     val k      = 3
@@ -124,8 +101,7 @@ class CompletenessSpec extends FunSuite:
     assertErrors(got, exp, "topPerTarget")
   }
 
-  // Observed: designs differing only in numPlanets share a canonicalKey, so Scorer.sort drops one.
-  test("B6 canonicalKey distinguishes designs that differ only in numPlanets".fail) {
+  test("B6 canonicalKey distinguishes designs that differ only in numPlanets") {
     val cfg = SearchConfig(topology = Topology.fromMode(Mode.SingleStage), planets = TeethBounds(2, 6),
       sunTeeth = TeethBounds(8, 14), planetTeeth = TeethBounds(8, 10), ringTeeth = TeethBounds(24, 34))
     val ds  = Calculator.search(cfg).toVector

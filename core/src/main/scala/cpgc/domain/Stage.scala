@@ -2,7 +2,7 @@ package cpgc.domain
 
 /** One planetary stage as built: gear set, module and the ring wall that sets
   * the ring's outer diameter (ADR 0016). */
-final case class Stage(set: GearSet, module: Module, ringWall: Double = Stage.DefaultRingWall):
+final case class Stage(set: GearSet, module: Module, ringWall: Double = cpgc.constraints.SearchConfig.DefaultRingWall):
   /** Center-to-center distance between sun axis and a planet axis. */
   def centerToCenter: Double =
     module.value * (set.sun.toDouble + set.planet.toDouble) / 2.0
@@ -19,7 +19,3 @@ final case class Stage(set: GearSet, module: Module, ringWall: Double = Stage.De
   /** Outer diameter of the sun gear. */
   def sunOuterDiameter: Double =
     module.value * (set.sun.toDouble + 2.0)
-
-object Stage:
-  /** Matches `SearchConfig.DefaultRingWall`. */
-  val DefaultRingWall: Double = 2.0

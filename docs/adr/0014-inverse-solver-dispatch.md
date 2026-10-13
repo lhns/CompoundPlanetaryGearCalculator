@@ -1,7 +1,7 @@
 # ADR 0014 — Inverse-solver dispatch and brute-force fallback
 
 ## Status
-Accepted (D5 of the role-assignment refactor; see [ADR 0013](0013-generalised-role-assignment.md)).
+Superseded by [ADR 0017](0017-single-search-engine.md): the closed-form and brute-force inverse solvers were removed (originally D5 of the role-assignment refactor; see [ADR 0013](0013-generalised-role-assignment.md)).
 
 ## Context
 
