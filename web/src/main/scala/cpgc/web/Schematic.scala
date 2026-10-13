@@ -6,7 +6,7 @@ import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
 import cpgc.domain.{CompoundDesign, Mode, Stage}
 import cpgc.kinematics.{BodyAngles, Kinematics}
 import cpgc.render.Phasing
-import cpgc.web.SchematicLayout.{bodyAnchor, rotateXform, toRad}
+import cpgc.web.SchematicLayout.{rotateXform, toRad}
 
 /** Animated SVG schematic. Static layout is rebuilt only when the selected
   * design changes; the per-frame `phase` signal only updates `transform`
@@ -21,7 +21,13 @@ object Schematic:
   private val Stage2Sun    = "#ff9f1c"
   private val Stage2Planet = "#73d2de"
   private val CarrierColor = "#8b949e"
-  private val CouplingColor = "#f0883e" // amber accent for novel inter-stage welds
+  // Coupling accents (amber, teal) are theme-aware: `defs()` embeds the light/dark pairs as
+  // custom properties on the schematic's <svg>, so the page's CSS needn't know them.
+  private val CouplingColors = Map(1 -> "var(--cpl1)", 2 -> "var(--cpl2)")
+  private val StyleTag = com.raquo.laminar.tags.SvgTag[org.scalajs.dom.SVGElement]("style")
+  private val CouplingStyle =
+    """.cpgc-schem{--cpl1:#ffb000;--cpl2:#19c3b1}
+      |@media (prefers-color-scheme: light){.cpgc-schem{--cpl1:#b35c00;--cpl2:#007c7c}}""".stripMargin
   // Theme-aware colours come from the page's CSS variables (index.html).
   private val TextColor    = "var(--svg-text)"
   private val SubText      = "var(--svg-sub)"
@@ -77,7 +83,8 @@ object Schematic:
       searchFractionSignal:   Signal[Double]
   ): SvgElement =
     s.svg(
-      s.viewBox := "-220 -160 440 320",
+      svgClassAttr := "cpgc-schem",
+      s.viewBox := "-220 -160 440 350",
       s.width   := "100%",
       s.height  := "100%",
       svg.preserveAspectRatio := "xMidYMid meet",
@@ -95,6 +102,7 @@ object Schematic:
 
   private def defs(): SvgElement =
     s.defs(
+      StyleTag(CouplingStyle),
       s.radialGradient(
         s.idAttr := "sun-glow",
         s.stop(s.offsetAttr := "0%",   s.stopColor := "#fff5b5", s.stopOpacity := "0.55"),
@@ -205,82 +213,75 @@ object Schematic:
     // Tooth phasing shared with the OpenSCAD export, so drawn teeth mesh in every valid design.
     val phasing = Phasing.solve(d)
 
+    val marks = SchematicLayout.couplingMarks(topology)
+    def slotOf(b: Body): Option[Int] = marks.bodies.get(b)
+
     val s1 = stageGroup(d.stage1, cx1, "Stage 1", Stage1Sun, Stage1Planet, Stage1Ring,
                         angles, stageIndex = 1, showSun = topology.s1Present, phasing = phasing.stage1,
                         sunRole = roles.stage1Sun,
                         carrierRole = roles.stage1Carrier,
-                        ringRole = roles.stage1Ring)
+                        ringRole = roles.stage1Ring,
+                        sunSlot = slotOf(Body.S1), carrierSlot = slotOf(Body.C1),
+                        ringSlot = slotOf(Body.R1), planetSlot = marks.planets)
     val s2 = d.stage2.zip(phasing.stage2).map((st2, ph2) =>
       stageGroup(st2, cx2, "Stage 2", Stage2Sun, Stage2Planet, Stage2Ring,
                  angles, stageIndex = 2,
                  showSun = topology.s2Present, phasing = ph2,
                  sunRole = roles.stage2Sun,
                  carrierRole = roles.stage2Carrier,
-                 ringRole = roles.stage2Ring))
+                 ringRole = roles.stage2Ring,
+                 sunSlot = slotOf(Body.S2), carrierSlot = slotOf(Body.C2),
+                 ringSlot = slotOf(Body.R2), planetSlot = marks.planets))
 
-    // Both couplings are drawn: firstCoupling on the lower label row, second
-    // on the upper one, so a compound with e.g. {CarrierToCarrier, PlanetStack}
-    // shows two stacked annotations.
-    val divider =
-      if twoStage then
-        couplingConnector(topology.firstCoupling,  cx1, cx2, labelY = 142) ++
-        couplingConnector(topology.secondCoupling, cx1, cx2, labelY = 132)
-      else Vector.empty
+    val couplings =
+      d.stage2.fold(Vector.empty[SvgElement]) { st2 =>
+        val lay1 = SchematicLayout.stageLayout(d.stage1, cx1)
+        val lay2 = SchematicLayout.stageLayout(st2, cx2)
+        Vector(1 -> topology.firstCoupling, 2 -> topology.secondCoupling).flatMap { (slot, c) =>
+          if c == Coupling.PlanetStack then planetLinks(d, st2, slot, angles, cx1, cx2)
+          else SchematicLayout.connector(c, slot, lay1, lay2).toVector.flatMap(connectorEls(_, slot))
+        }
+      }
 
-    headerBanner(d) ++ s1 ++ s2.getOrElse(Vector.empty) ++ divider ++ footerInfo(d) ++ legend()
+    headerBanner(d) ++ s1 ++ s2.getOrElse(Vector.empty) ++ couplings ++ footerInfo(d) ++ legend(d)
 
+  /** Line style of a coupling's marks: slot 1 solid, slot 2 dashed, so the pair also differs without colour. */
+  private def slotDash(slot: Int): String = if slot == 1 then "none" else "5 3"
 
-  /** Inter-stage coupling annotation overlaid between the two stage groups.
-    *
-    * `PlanetStack` and `CarrierToCarrier` draw the legacy "shared" centre line;
-    * every other weld draws a curved arc between the two welded bodies' visual
-    * anchor points. The label sits at `labelY` so two stacked couplings don't
-    * overlap. */
-  private def couplingConnector(
-      c: Coupling, cx1: Double, cx2: Double, labelY: Double
+  /** A weld drawn as a curve between the bodies' rims, over a background-coloured casing for contrast. */
+  private def connectorEls(c: SchematicLayout.Connector, slot: Int): Vector[SvgElement] =
+    val color = CouplingColors(slot)
+    val pathD = f"M ${c.from._1}%.1f ${c.from._2}%.1f Q ${c.ctrl._1}%.1f ${c.ctrl._2}%.1f ${c.to._1}%.1f ${c.to._2}%.1f"
+    def end(p: (Double, Double)): Vector[SvgElement] = Vector(
+      s.circle(s.cx := f"${p._1}%.1f", s.cy := f"${p._2}%.1f", s.r := "4.2", s.fill := "var(--schematic-bg)"),
+      s.circle(s.cx := f"${p._1}%.1f", s.cy := f"${p._2}%.1f", s.r := "3", s.fill := color)
+    )
+    Vector(
+      s.path(s.d := pathD, s.fill := "none", s.stroke := "var(--schematic-bg)", s.strokeWidth := "5.5",
+             s.strokeOpacity := "0.8", svg.strokeLineCap := "round", s.pointerEvents := "none"),
+      s.path(s.d := pathD, s.fill := "none", s.stroke := color, s.strokeWidth := "2.4",
+             svg.strokeDashArray := slotDash(slot), svg.strokeLineCap := "butt", s.pointerEvents := "none")
+    ) ++ end(c.from) ++ end(c.to)
+
+  /** Dashed links joining planet k of stage 1 to planet k of stage 2: one stacked pinion each.
+    * Endpoints follow the carriers, so the lines turn with the planets. */
+  private def planetLinks(
+      d: CompoundDesign, st2: Stage, slot: Int, angles: Signal[BodyAngles], cx1: Double, cx2: Double
   ): Vector[SvgElement] =
-    inline def label(text: String): SvgElement =
-      s.text(
-        s.x := "0", s.y := f"$labelY%.2f", s.textAnchor := "middle",
-        s.fill := CouplingColor, s.fontSize := "9",
-        s.fontFamily := "ui-monospace, monospace",
-        text
+    val lay1 = SchematicLayout.stageLayout(d.stage1, cx1)
+    val lay2 = SchematicLayout.stageLayout(st2, cx2)
+    val n = d.stage1.set.numPlanets
+    Vector.tabulate(n) { k =>
+      val ends = angles.map(b =>
+        (SchematicLayout.planetPositionAt(k, n, cx1, lay1.carrierR, b.carrier1),
+         SchematicLayout.planetPositionAt(k, n, cx2, lay2.carrierR, b.carrier2)))
+      s.line(
+        s.x1 <-- ends.map(e => f"${e._1._1}%.2f"), s.y1 <-- ends.map(e => f"${e._1._2}%.2f"),
+        s.x2 <-- ends.map(e => f"${e._2._1}%.2f"), s.y2 <-- ends.map(e => f"${e._2._2}%.2f"),
+        s.stroke := CouplingColors(slot), s.strokeWidth := "1.2", s.strokeOpacity := "0.8",
+        svg.strokeDashArray := "2 3", s.pointerEvents := "none"
       )
-    c match
-      case Coupling.PlanetStack =>
-        Vector(
-          s.line(
-            s.x1 := f"${cx1 + 95}%.2f", s.y1 := "0",
-            s.x2 := f"${cx2 - 95}%.2f", s.y2 := "0",
-            s.stroke := CarrierColor, s.strokeOpacity := "0.55",
-            s.strokeWidth := "3", svg.strokeLineCap := "butt"
-          ),
-          label("stacked planets")
-        )
-      case Coupling.CarrierToCarrier =>
-        Vector(
-          s.line(
-            s.x1 := f"${cx1 + 95}%.2f", s.y1 := "0",
-            s.x2 := f"${cx2 - 95}%.2f", s.y2 := "0",
-            s.stroke := CarrierColor, s.strokeOpacity := "0.55",
-            s.strokeWidth := "3", svg.strokeLineCap := "butt"
-          ),
-          label("shared carrier")
-        )
-      case other =>
-        // Curved arc between the two welded bodies' anchor points.
-        val (ba, bb) = Coupling.bodyPair(other).getOrElse((Body.R1, Body.S2))
-        val (ax, ay) = bodyAnchor(ba, cx1, cx2)
-        val (bx, by) = bodyAnchor(bb, cx1, cx2)
-        Vector(
-          s.path(
-            s.d := f"M $ax%.1f $ay%.1f Q 0 ${math.min(ay, by) - 30}%.1f $bx%.1f $by%.1f",
-            s.fill := "none", s.stroke := CouplingColor,
-            s.strokeWidth := "2.5", svg.strokeLineCap := "butt",
-            s.strokeOpacity := "0.85"
-          ),
-          label(Coupling.label(other))
-        )
+    }
 
   /** Schematic title: the preset name when the topology is a named one, else a generic description. */
   def title(d: CompoundDesign): String =
@@ -320,8 +321,8 @@ object Schematic:
       )
     )
 
-  /** Tiny colour-keyed legend in the bottom-left of the schematic. */
-  private def legend(): Vector[SvgElement] =
+  /** Legend: role markers bottom-left; one swatch per coupling in a strip under the footer. */
+  private def legend(d: CompoundDesign): Vector[SvgElement] =
     val baseX = -212.0
     val baseY = 128.0 // stacked rows in the bottom-left corner, clear of the title and footer
     def row(i: Int, color: String, name: String): Vector[SvgElement] =
@@ -332,7 +333,23 @@ object Schematic:
                s.fill := SubText, s.fontSize := "9",
                s.fontFamily := "ui-monospace, monospace", name)
       )
-    row(0, InputColor, "input") ++ row(1, OutputColor, "output") ++ row(2, FixedColor, "fixed")
+    val roleRows = row(0, InputColor, "input") ++ row(1, OutputColor, "output") ++ row(2, FixedColor, "fixed")
+    val couplingRows =
+      if d.stage2.isEmpty then Vector.empty
+      else
+        Vector(1 -> d.topology.firstCoupling, 2 -> d.topology.secondCoupling).zipWithIndex.flatMap {
+          case ((slot, c), i) =>
+            val y = 166.0 + 14.0 * i
+            Vector(
+              s.rect(s.x := f"${baseX - 3}%.2f", s.y := f"${y - 4}%.2f", s.width := "9", s.height := "9",
+                     s.fill := CouplingColors(slot), s.rx := "1.5"),
+              s.text(s.x := f"${baseX + 11}%.2f", s.y := f"${y + 4}%.2f",
+                     s.fill := TextColor, s.fontSize := "10.5",
+                     s.fontFamily := "ui-monospace, monospace",
+                     SchematicLayout.couplingLegendLabel(c))
+            )
+        }
+    roleRows ++ couplingRows
 
   private def footerInfo(d: CompoundDesign): Vector[SvgElement] =
     val module1 = f"m₁=${d.stage1.module.value}%.2f mm"
@@ -426,6 +443,10 @@ object Schematic:
       sunRole: Role,
       carrierRole: Role,
       ringRole: Role,
+      sunSlot: Option[Int],
+      carrierSlot: Option[Int],
+      ringSlot: Option[Int],
+      planetSlot: Option[Int],
   ): Vector[SvgElement] =
     val lay          = SchematicLayout.stageLayout(stage, cx)
     val mPx          = lay.mPx
@@ -444,9 +465,19 @@ object Schematic:
     val ringSig: Signal[Double] = angles.map(b =>
       if stageIndex == 1 then b.ring1 else b.ring2)
 
-    val ringStroke   = roleStrokeColor(ringRole, ringColor)
+    // A coupled body takes its coupling's colour unless it is the input/output/fixed body, whose marker colour wins;
+    // its coupling then shows as a band just outside the rim.
+    def baseColor(role: Role, slot: Option[Int], stageColor: String): String =
+      roleStrokeColor(role, slot.fold(stageColor)(CouplingColors))
+    def band(slot: Option[Int], r: Double): SvgElement = slot match
+      case None => s.g()
+      case Some(sl) =>
+        s.circle(s.cx := f"$cx%.2f", s.cy := "0", s.r := f"$r%.2f", s.fill := "none",
+                 s.stroke := CouplingColors(sl), s.strokeWidth := "2.2", s.strokeOpacity := "0.9",
+                 svg.strokeDashArray := slotDash(sl), s.pointerEvents := "none")
+    val ringStroke   = baseColor(ringRole, ringSlot, ringColor)
     val ringStrokeW  = roleStrokeWidth(ringRole, 2.0)
-    val sunStroke    = roleStrokeColor(sunRole, sunColor)
+    val sunStroke    = baseColor(sunRole, sunSlot, sunColor)
 
     // Dashed pitch circle
     def pitchCircle(centerX: Double, centerY: Double, radius: Double): SvgElement =
@@ -457,6 +488,14 @@ object Schematic:
         svg.strokeDashArray := "2.5 2.5", svg.strokeLineCap := "butt",
         s.strokeOpacity := "0.7"
       )
+
+    // Translucent tint over the ring body (between its outer rim and the teeth) for a coupled ring.
+    val ringTint = ringSlot.fold(s.g())(sl =>
+      s.path(
+        s.d := f"M ${cx + ringOR}%.2f 0 A $ringOR%.2f $ringOR%.2f 0 1 1 ${cx - ringOR}%.2f 0 A $ringOR%.2f $ringOR%.2f 0 1 1 ${cx + ringOR}%.2f 0 Z " +
+               SchematicLayout.internalGearPath(cx, 0, stage.set.ring.toInt, mPx, toRad(phasing.ring)),
+        svg.fillRule := "evenodd", s.fill := CouplingColors(sl), s.fillOpacity := "0.22",
+        svg.transform <-- ringSig.map(rotateXform(_, cx, 0)), s.pointerEvents := "none"))
 
     // Ring: rotates about stage center.
     val ringEl = s.g(
@@ -539,13 +578,16 @@ object Schematic:
 
     // Carrier: outer <g> rotates about stage center; planets sit inside at static
     // angles, with their own inner <g> handling per-planet spin in the carrier frame.
-    val carrierStroke = roleStrokeColor(carrierRole, CarrierColor)
+    val carrierStroke = baseColor(carrierRole, carrierSlot, CarrierColor)
     val carrierStrokeW = roleStrokeWidth(carrierRole, 1.2)
-    val carrierOpacity = carrierRole match
-      case Role.Plain => "0.7"
-      case _          => "1.0"
+    val carrierOpacity = if carrierRole == Role.Plain && carrierSlot.isEmpty then "0.7" else "1.0"
+    val planetStroke   = baseColor(Role.Plain, planetSlot, planetColor)
     val carrierG = s.g(
       svg.transform <-- carrierSig.map(rotateXform(_, cx, 0)),
+      // Coupled carrier: a solid band under the dashed circle, so it shows even when a role colour is drawn.
+      carrierSlot.fold(s.g())(sl =>
+        s.circle(s.cx := f"$cx%.2f", s.cy := "0", s.r := f"$carrierR%.2f", s.fill := "none",
+                 s.stroke := CouplingColors(sl), s.strokeWidth := "4.5", s.strokeOpacity := "0.45")),
       // Carrier circle (rotationally symmetric, but inside this group anyway)
       s.circle(
         s.cx := f"$cx%.2f", s.cy := "0",
@@ -560,7 +602,8 @@ object Schematic:
         val spoke = s.line(
           s.x1 := f"$cx%.2f", s.y1 := "0",
           s.x2 := f"$pxC%.2f", s.y2 := f"$pyC%.2f",
-          s.stroke := carrierStroke, s.strokeOpacity := "0.35", s.strokeWidth := "1.2"
+          s.stroke := carrierStroke, s.strokeOpacity := (if carrierSlot.isDefined then "0.8" else "0.35"),
+          s.strokeWidth := (if carrierSlot.isDefined then "2.2" else "1.2")
         )
         // Planet body: spin relative to the carrier frame
         val planet = s.g(
@@ -568,12 +611,23 @@ object Schematic:
             rotateXform(ps - c, pxC, pyC)
           },
           pitchCircle(pxC, pyC, planetPitchR),
-          involuteToothedGear(pxC, pyC, stage.set.planet.toInt, mPx, planetColor,
+          involuteToothedGear(pxC, pyC, stage.set.planet.toInt, mPx, planetStroke,
             rotateRad = toRad(phasing.planets(i))),
           s.circle(s.cx := f"$pxC%.2f", s.cy := f"$pyC%.2f", s.r := "1.6",
-                   s.fill := HubFill, s.stroke := planetColor, s.strokeWidth := "0.6")
+                   s.fill := HubFill, s.stroke := planetStroke, s.strokeWidth := "0.6")
         )
-        Vector(spoke, planet)
+        // "Same part" marker at the pin of a stacked planet; counter-rotated so the glyph stays upright.
+        val pinMark = planetSlot.fold(s.g())(sl =>
+          s.g(
+            svg.transform <-- carrierSig.map(c => rotateXform(-c, pxC, pyC)),
+            s.pointerEvents := "none",
+            s.circle(s.cx := f"$pxC%.2f", s.cy := f"$pyC%.2f", s.r := "5.2",
+                     s.fill := HubFill, s.stroke := CouplingColors(sl), s.strokeWidth := "1.4"),
+            s.text(s.x := f"$pxC%.2f", s.y := f"${pyC + 3.6}%.2f", s.textAnchor := "middle",
+                   s.fill := CouplingColors(sl), s.fontSize := "11", s.fontWeight := "700",
+                   s.fontFamily := "ui-sans-serif, system-ui", "≡")
+          ))
+        Vector(spoke, planet, pinMark)
       }
     )
 
@@ -591,4 +645,13 @@ object Schematic:
       labelText
     )
 
-    Vector(ringEl, carrierG, sunEl, ringRoleBadge, sunRoleBadge, carrierRoleBadge, labelEl)
+    // Coupling bands just outside the ring rim and the sun's tips; hub ring for a coupled carrier.
+    val bands = Vector(
+      band(ringSlot, ringOR + 2.5),
+      if showSun then band(sunSlot, lay.sunOR + 2.0) else s.g(),
+      carrierSlot.fold(s.g())(sl =>
+        s.circle(s.cx := f"$cx%.2f", s.cy := "0", s.r := "6.5", s.fill := "none",
+                 s.stroke := CouplingColors(sl), s.strokeWidth := "2", s.pointerEvents := "none"))
+    )
+
+    Vector(ringTint, ringEl, carrierG, sunEl) ++ bands ++ Vector(ringRoleBadge, sunRoleBadge, carrierRoleBadge, labelEl)
