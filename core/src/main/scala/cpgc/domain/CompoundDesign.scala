@@ -10,7 +10,10 @@ final case class CompoundDesign(
     topology: Topology,
     ratio: Ratio,
     efficiency: Double,
-    validity: Validity = Validity.Ok
+    validity: Validity = Validity.Ok,
+    /** ADR 0018 assembly mode: stacked planets are cut with a per-planet twist (N different
+      * planet parts) instead of being N copies of one part. Only meaningful when stacked. */
+    phasedPinions: Boolean = false
 ):
   /** "Standard" / "CDCP" / "NSS" / "SingleStage" for canonical topologies,
     * "CDCP (sun-less)" for the sun-less CDCP, else "Custom". */

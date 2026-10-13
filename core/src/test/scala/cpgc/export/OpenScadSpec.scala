@@ -2,7 +2,6 @@ package cpgc.`export`
 
 import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
 import cpgc.domain.{CompoundDesign, GearSet, Module, Ratio, Stage, Teeth}
-import cpgc.render.GearGeometry
 import munit.FunSuite
 
 /** P3: OpenSCAD phasing, bores, ring OD, stage placement.
@@ -174,16 +173,37 @@ class OpenScadSpec extends FunSuite:
     assertEquals(meshErrors(single.stage1, 3, parseStage(one, "stage1"), true), Seq.empty)
   }
 
-  test("planet offsets agree with GearGeometry.planetPhaseOffset (relative to planet 0)") {
-    // Same sun-mesh rule: local rotation y_k = x_k − k/N differs between planets by Ts·(k/N)/Tp turns.
-    val s = standard.stage1.set
-    val n = s.numPlanets
-    val loc = st1.planetRot.zipWithIndex.map((x, k) => x / 360.0 - k.toDouble / n)
-    for k <- 1 until n do
-      val mine = (loc(k) - loc(0)) * s.planet.toInt
-      val gg   = (GearGeometry.planetPhaseOffset(s.sun.toInt, s.planet.toInt, 2 * math.Pi * k / n) -
-        GearGeometry.planetPhaseOffset(s.sun.toInt, s.planet.toInt, 0.0)) / (2 * math.Pi) * s.planet.toInt
-      assert(isInt(mine - gg), s"k=$k mine=$mine gg=$gg")
+  // -- ADR 0018: individually phased pinions -----------------------------------
+
+  private val phasedCfg = cpgc.constraints.SearchConfig(
+    topology = Topology.standardCompound,
+    sunTeeth = cpgc.constraints.TeethBounds(8, 16), planetTeeth = cpgc.constraints.TeethBounds(8, 12),
+    ringTeeth = cpgc.constraints.TeethBounds(30, 60), planets = cpgc.constraints.TeethBounds(3, 4))
+
+  test("phased pinions: designs valid only with phasing mesh in the export, without a warning") {
+    val identical = cpgc.Calculator.search(phasedCfg).map(cpgc.search.Scorer.canonicalKey).toSet
+    val phased    = cpgc.Calculator.search(phasedCfg.copy(phasedPinions = true)).toVector
+    val onlyPhased = phased.filterNot(d => identical.contains(cpgc.search.Scorer.canonicalKey(d)))
+    assertEquals(onlyPhased.size, 128)
+    for d <- onlyPhased do
+      assert(d.phasedPinions)
+      val out = OpenScad.emit(d)
+      assert(!out.contains("WARNING"), out)
+      val a = parseStage(out, "stage1"); val b = parseStage(out, "stage2")
+      val errs = meshErrors(d.stage1, d.stage1.set.numPlanets, a, true) ++
+        meshErrors(d.stage2.get, d.stage2.get.set.numPlanets, b, true)
+      assert(errs.isEmpty, s"${d.stage1.set} ${d.stage2.get.set}: ${errs.mkString(",")}\n$out")
+      assert(out.contains("planet_twist = ["), out)
+  }
+
+  test("identical-pinion designs stay identical: no twist, one body angle per planet, no warning") {
+    val ds = cpgc.Calculator.search(phasedCfg).take(200).toVector
+    assert(ds.nonEmpty)
+    for d <- ds do
+      assert(!d.phasedPinions)
+      val out = OpenScad.emit(d)
+      assert(!out.contains("WARNING") && !out.contains("planet_twist"), out)
+      assertEquals(parseStage(out, "stage1").planetRot, parseStage(out, "stage2").planetRot)
   }
 
   test("header carries the topology") {
