@@ -64,6 +64,7 @@ class Layout3DSpec extends FunSuite:
       assertEqualsDouble(p.prims.map(_.z0).min, 0.0, eps)
       assertEqualsDouble(p.prims.map(_.z1).max, l.stage2Z.get + l.faceWidth, eps)
     assert(!tones(l).contains(Tone.Planet1) && !tones(l).contains(Tone.Planet2))
+    assert(planets.flatMap(_.prims).forall(_.tone == Tone.Cpl2)) // PlanetStack is the second coupling
 
   test("without PlanetStack each stage has its own planets"):
     val l = build(design(Topology.ravigneaux))
@@ -91,7 +92,7 @@ class Layout3DSpec extends FunSuite:
     assert(rav.contains(Vector(Body.C1, Body.S2)) && rav.contains(Vector(Body.R1, Body.R2)))
 
   private def welds(l: Layout, body: Body) =
-    l.clusters.find(_.bodies.contains(body)).get.prims.filter(_.tone == Tone.Weld)
+    l.clusters.find(_.bodies.contains(body)).get.connectors
 
   test("Ring1-Sun2 weld: spokes on top of ring 1 and a shaft up to sun 2"):
     val l = build(design(Topology.ringToSunCascade))
@@ -117,9 +118,17 @@ class Layout3DSpec extends FunSuite:
     assertEqualsDouble(sleeve.z0, l.faceWidth, eps)
     assertEqualsDouble(sleeve.z1, l.stage2Z.get, eps)
 
+  test("coupled bodies and their connectors take the coupling's colour, pinned roles win"):
+    val l = build(design(Topology.ringToSunCascade)) // coupling 1 = CarrierToCarrier, 2 = RingToSun
+    val rs = l.clusters.find(_.bodies.contains(Body.R1)).get
+    assert(rs.connectors.forall(_.tone == Tone.Cpl2))
+    assertEquals(rs.prims.map(_.tone).toSet, Set(Tone.Fixed)) // the fixed role wins over the coupling colour
+    assert(l.clusters.find(_.bodies.contains(Body.C1)).get.prims.forall(_.tone == Tone.Cpl1))
+    assertEquals(l.couplings.map(_._1), Vector(1, 2))
+
   test("a single stage has no weld"):
     val l = build(CompoundDesign(stage(25, 11, 3), None, Topology.singleStage, Ratio(3.0), 0.9))
-    assert(!l.hasWeld && l.stage2Z.isEmpty)
+    assert(l.couplings.isEmpty && l.stage2Z.isEmpty && l.clusters.forall(_.connectors.isEmpty))
     assertEquals(l.clusters.size, 3)
 
   test("role tones: pinned clusters take their role, the rest their stage tint"):
@@ -140,23 +149,28 @@ class Layout3DSpec extends FunSuite:
         val spin = if p.stage == 1 then a.planet1Spin else a.planet2Spin
         assertEqualsDouble(planetAngle(p, a), spin - a.of(p.carrier), 1e-12)
 
-  test("gear point lists match the schematic's SVG paths vertex for vertex"):
-    def parse(path: String): Vector[(Double, Double)] =
-      path.stripSuffix("Z").trim.split("[ML]").map(_.trim).filter(_.nonEmpty).map { s =>
-        val Array(x, y) = s.split(" "): @unchecked
-        (x.toDouble, y.toDouble)
-      }.toVector
-    for (teeth, m, rot) <- Seq((12, 4.0, 0.0), (25, 2.0, 0.7), (47, 2.0, 1.1)) do
-      for (pts, path) <- Seq(
-        SchematicLayout.externalGearPoints(teeth, m, rot) -> SchematicLayout.externalGearPath(0, 0, teeth, m, rot),
-        SchematicLayout.internalGearPoints(teeth, m, rot) -> SchematicLayout.internalGearPath(0, 0, teeth, m, rot)
+  private def selfIntersections(p: Vector[(Double, Double)]): Int =
+    def cross(a: (Double, Double), b: (Double, Double), c: (Double, Double)) =
+      (b._1 - a._1) * (c._2 - a._2) - (b._2 - a._2) * (c._1 - a._1)
+    val n = p.size
+    (for
+      i <- 0 until n
+      j <- i + 2 until n if !(i == 0 && j == n - 1)
+      (a, b, c, d) = (p(i), p((i + 1) % n), p(j), p((j + 1) % n))
+      if cross(a, b, c) * cross(a, b, d) < 0 && cross(c, d, a) * cross(c, d, b) < 0
+    yield 1).size
+
+  test("gear outlines are simple polygons (extrudable) spanning root to tip"):
+    for (teeth, m, rot) <- Seq((8, 3.0, 0.0), (11, 2.0, 0.3), (25, 2.0, 0.7), (47, 2.0, 1.1)) do
+      for (internal, pts) <- Seq(
+        false -> SchematicLayout.externalGearPoints(teeth, m, rot),
+        true  -> SchematicLayout.internalGearPoints(teeth, m, rot)
       ) do
-        val ref = parse(path)
-        assertEquals(pts.size, ref.size)
-        pts.zip(ref).foreach { case ((x, y), (rx, ry)) =>
-          assertEqualsDouble(x, rx, 1e-3)
-          assertEqualsDouble(y, ry, 1e-3)
-        }
+        assertEquals(selfIntersections(pts), 0, s"teeth=$teeth internal=$internal")
+        val r  = cpgc.render.GearGeometry.gearRadii(teeth, m, internal)
+        val rs = pts.map((x, y) => math.hypot(x, y))
+        assertEqualsDouble(rs.max, if internal then r.root else r.outer, 1e-6)
+        assertEqualsDouble(rs.min, if internal then r.outer else r.root, 1e-6)
 
   // ── orbit maths ──────────────────────────────────────────────────────────
 

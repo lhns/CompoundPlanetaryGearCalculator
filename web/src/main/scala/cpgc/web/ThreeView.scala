@@ -20,7 +20,7 @@ object ThreeView:
   private val BaseColors: Map[Tone, Int] = Map(
     Tone.Sun1 -> 0xffd166, Tone.Ring1 -> 0x118ab2, Tone.Planet1 -> 0x06d6a0,
     Tone.Sun2 -> 0xff9f1c, Tone.Ring2 -> 0x9d4edd, Tone.Planet2 -> 0x73d2de,
-    Tone.Stacked -> 0x06d6a0, Tone.Carrier -> 0x8b949e, Tone.Weld -> 0xf0883e,
+    Tone.Carrier -> 0x8b949e,
     Tone.Fixed -> 0x4b5563, Tone.Input -> 0x7ee787, Tone.Output -> 0x58a6ff
   )
 
@@ -31,10 +31,17 @@ object ThreeView:
       Option.when(v.matches("#[0-9a-fA-F]{6}"))(Integer.parseInt(v.drop(1), 16))
     catch case _: Throwable => None
 
+  // Coupling accents, as in `Schematic` (amber, teal): dark / light theme pairs.
+  private def couplingColors(): (Int, Int) =
+    val light = try dom.window.matchMedia("(prefers-color-scheme: light)").matches catch case _: Throwable => false
+    if light then (0xb35c00, 0x007c7c) else (0xffb000, 0x19c3b1)
+
   private def palette(): Tone => Int =
     val roles = Map(Tone.Input -> "--role-input", Tone.Output -> "--role-output")
-    val all   = BaseColors ++ roles.flatMap((t, v) => cssColor(v).map(t -> _))
-    all
+    val (c1, c2) = couplingColors()
+    BaseColors ++ roles.flatMap((t, v) => cssColor(v).map(t -> _)) ++ Map(Tone.Cpl1 -> c1, Tone.Cpl2 -> c2)
+
+  private def hex(c: Int): String = f"#$c%06x"
 
   private def message(state: SearchState, found: Int): String = state match
     case SearchState.NoResults => "No design matches these constraints."
@@ -78,10 +85,10 @@ object ThreeView:
       current.foreach { (_, s) => scene.remove(s.root); s.dispose() }
       current = None
 
-    /** Rebuild for a new design (or empty); returns whether the design has a visible weld. */
-    def show(d: Option[CompoundDesign]): Boolean =
+    /** Rebuild for a new design (or empty); returns its couplings for the legend. */
+    def show(d: Option[CompoundDesign]): Vector[(Int, cpgc.constraints.Coupling)] =
       clear()
-      val welded = d.exists { design =>
+      val cs = d.fold(Vector.empty[(Int, cpgc.constraints.Coupling)]) { design =>
         val layout = Layout3D.build(design)
         val s      = new ThreeScene(layout, palette())
         scene.add(s.root)
@@ -91,10 +98,10 @@ object ThreeView:
           layout.outerRadius * 2.6 * 35.0 / FovDeg)
         orbit.rehome(home)
         pose(phase)
-        layout.hasWeld
+        layout.couplings
       }
       draw()
-      welded
+      cs
 
     def pose(p: Double): Unit =
       phase = p
@@ -115,7 +122,7 @@ object ThreeView:
       progress: Signal[Int]
   ): HtmlElement =
     val noWebgl  = Var(false)
-    val hasWeld  = Var(false)
+    val couplings = Var(Vector.empty[(Int, cpgc.constraints.Coupling)])
     val host     = div(cls := "three-host")
     val hostRef  = host.ref
 
@@ -131,7 +138,10 @@ object ThreeView:
       div(cls := "three-legend",
         swatch("var(--role-input)", "input"), swatch("var(--role-output)", "output"),
         swatch("#4b5563", "fixed"),
-        child.maybe <-- hasWeld.signal.map(Option.when(_)(swatch("#f0883e", "weld / coupling")))),
+        children <-- couplings.signal.map { cs =>
+          val (c1, c2) = couplingColors()
+          cs.map((slot, c) => swatch(hex(if slot == 1 then c1 else c2), SchematicLayout.couplingLegendLabel(c)))
+        }),
       onMountUnmountCallbackWithState[HtmlElement, Option[Live]](
         mount = ctx =>
           if !Three.webglAvailable() then
@@ -161,7 +171,7 @@ object ThreeView:
             observer.observe(hostRef)
             live.resize(hostRef.clientWidth.toDouble, hostRef.clientHeight.toDouble)
 
-            design.foreach(d => hasWeld.set(live.show(d)))(ctx.owner)
+            design.foreach(d => couplings.set(live.show(d)))(ctx.owner)
             phase.foreach(live.pose)(ctx.owner)
             Some(live),
         unmount = (_, live) => live.flatten.foreach(_.dispose())

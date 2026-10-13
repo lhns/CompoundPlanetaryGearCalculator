@@ -24,9 +24,10 @@ object Layout3D:
   private val PlateClearance = 0.04 // plate-to-gear clearance / face width
   private val ArmFactor      = 0.08 // ring-weld spoke thickness / face width
 
-  /** What a solid is, so the renderer can colour it (the 2D schematic's accents for pinned roles). */
+  /** What a solid is, so the renderer can colour it like the 2D schematic: pinned roles first, then the
+    * coupling it belongs to (`Cpl1` / `Cpl2`: first / second coupling), else its stage tint. */
   enum Tone:
-    case Input, Output, Fixed, Weld, Carrier, Sun1, Ring1, Planet1, Sun2, Ring2, Planet2, Stacked
+    case Input, Output, Fixed, Cpl1, Cpl2, Carrier, Sun1, Ring1, Planet1, Sun2, Ring2, Planet2
 
   /** A solid in its group's local frame. */
   sealed trait Prim:
@@ -57,7 +58,8 @@ object Layout3D:
 
   /** Rigidly welded bodies. `angleBody` supplies the rotation. */
   final case class Cluster(
-      bodies: Vector[Body], angleBody: Body, role: Option[BodyRole], prims: Vector[Prim], planets: Vector[PlanetPart]
+      bodies: Vector[Body], angleBody: Body, role: Option[BodyRole], prims: Vector[Prim],
+      connectors: Vector[Prim], planets: Vector[PlanetPart]
   )
 
   final case class Layout(
@@ -68,10 +70,10 @@ object Layout3D:
       zMin: Double,
       zMax: Double,
       outerRadius: Double,
-      clusters: Vector[Cluster]
+      clusters: Vector[Cluster],
+      couplings: Vector[(Int, Coupling)] // (slot, coupling) of a compound, for the legend
   ):
-    def allPrims: Vector[Prim] = clusters.flatMap(c => c.prims ++ c.planets.flatMap(_.prims))
-    def hasWeld: Boolean       = allPrims.exists(_.tone == Tone.Weld)
+    def allPrims: Vector[Prim] = clusters.flatMap(c => c.prims ++ c.connectors ++ c.planets.flatMap(_.prims))
 
   private def flip(pts: Vector[(Double, Double)]): Vector[(Double, Double)] = pts.map((x, y) => (x, -y))
 
@@ -104,6 +106,9 @@ object Layout3D:
     val phases  = Vector(Some(phasing.stage1), phasing.stage2).flatten
     val shaftR  = 0.3 * stages.map(s => s.module.value * s.set.sun.toDouble / 2.0).min
     val stacked = t.stacked && twoStage
+    val marks   = SchematicLayout.couplingMarks(t)
+    def slotTone(slot: Int): Tone = if slot == 1 then Tone.Cpl1 else Tone.Cpl2
+    def freeTone(b: Body, stage: Tone): Tone = marks.bodies.get(b).fold(stage)(slotTone)
 
     def stageOf(b: Body): Int = if b == Body.S1 || b == Body.C1 || b == Body.R1 then 1 else 2
     def stageFor(i: Int): Stage = if i == 1 then d.stage1 else d.stage2.get
@@ -140,13 +145,13 @@ object Layout3D:
       b match
         case Body.S1 | Body.S2 =>
           val outline = flip(externalGearPoints(st.set.sun.toInt, m, ph.sun.fold(0.0)(toRad)))
-          Vector(Extruded(outline, None, z, z + w, roleTone(role, if i == 1 then Tone.Sun1 else Tone.Sun2)))
+          Vector(Extruded(outline, None, z, z + w, roleTone(role, freeTone(b, if i == 1 then Tone.Sun1 else Tone.Sun2))))
         case Body.R1 | Body.R2 =>
           val outline = flip(internalGearPoints(st.set.ring.toInt, m, toRad(ph.ring)))
           Vector(Extruded(outline, Some(st.ringOuterDiameter / 2.0), z, z + w,
-            roleTone(role, if i == 1 then Tone.Ring1 else Tone.Ring2)))
+            roleTone(role, freeTone(b, if i == 1 then Tone.Ring1 else Tone.Ring2))))
         case Body.C1 | Body.C2 =>
-          val tone     = roleTone(role, Tone.Carrier)
+          val tone     = roleTone(role, freeTone(b, Tone.Carrier))
           val (p0, p1) = plateZ(i)
           val pos      = planetPos(st)
           val armW     = 3.0 * pinR(st)
@@ -168,29 +173,30 @@ object Layout3D:
       }
 
     def stackedParts(carrier: Body): Vector[PlanetPart] =
+      val stackTone = marks.planets.fold(Tone.Planet1)(slotTone)
       val hubR = 0.5 * math.min(planetRoot(d.stage1), planetRoot(d.stage2.get))
       planetPos(d.stage1).zipWithIndex.map { case ((x, y), k) =>
         def half(i: Int) =
           val st = stageFor(i)
           Extruded(flip(externalGearPoints(st.set.planet.toInt, st.module.value, toRad(phases(i - 1).planets(k)))),
-            None, zOf(i - 1), zOf(i - 1) + w, Tone.Stacked)
+            None, zOf(i - 1), zOf(i - 1) + w, stackTone)
         PlanetPart(k, x, y, 1, carrier, stacked = true,
-          Vector(half(1), Cyl(0, 0, hubR, hubR, z1 + w, z2, false, Tone.Stacked), half(2)))
+          Vector(half(1), Cyl(0, 0, hubR, hubR, z1 + w, z2, false, stackTone), half(2)))
       }
 
     /** Solids that make a coupling visible: a shaft, ring spokes or sleeve, carrier tie posts. */
-    def connector(a: Body, b: Body): Vector[Prim] =
+    def connector(a: Body, b: Body, weld: Tone): Vector[Prim] =
       def ringR(i: Int) = stageFor(i).ringOuterDiameter / 2.0
       (a, b) match
         case (Body.R1, Body.R2) =>
-          Vector(Cyl(0, 0, ringR(2), ringR(1), z1 + w, z2, true, Tone.Weld))
+          Vector(Cyl(0, 0, ringR(2), ringR(1), z1 + w, z2, true, weld))
         case (Body.C1, Body.C2) if stacked => Vector.empty
         case (Body.C1, Body.C2) =>
           val r = math.max(d.stage1.centerToCenter, d.stage2.get.centerToCenter)
           val n = d.stage1.set.numPlanets
           Vector.tabulate(n) { k =>
             val th = 2.0 * math.Pi * (k + 0.5) / n
-            Cyl(r * math.sin(th), r * math.cos(th), pinR(d.stage1), pinR(d.stage1), plateZ(1)._1, plateZ(2)._2, false, Tone.Weld)
+            Cyl(r * math.sin(th), r * math.cos(th), pinR(d.stage1), pinR(d.stage1), plateZ(1)._1, plateZ(2)._2, false, weld)
           }
         case _ =>
           def spokes(r: Body): Vector[Prim] =
@@ -200,16 +206,16 @@ object Layout3D:
                 if r == Body.R1 then (ringR(1), z1 + w, z1 + w + armT) else (ringR(2), z2 - armT, z2)
               Vector.tabulate(3) { k =>
                 val th = 2.0 * math.Pi * k / 3
-                Bar(0, 0, rad * math.cos(th), rad * math.sin(th), 2.0 * shaftR, za, zb, Tone.Weld)
+                Bar(0, 0, rad * math.cos(th), rad * math.sin(th), 2.0 * shaftR, za, zb, weld)
               }
           val (za, zb) = (attachZ(a), attachZ(b))
-          Vector(Cyl(0, 0, shaftR, shaftR, math.min(za, zb), math.max(za, zb), false, Tone.Weld)) ++ spokes(a) ++ spokes(b)
+          Vector(Cyl(0, 0, shaftR, shaftR, math.min(za, zb), math.max(za, zb), false, weld)) ++ spokes(a) ++ spokes(b)
 
+    val slots = if twoStage then Vector(1 -> t.firstCoupling, 2 -> t.secondCoupling) else Vector.empty
     val connectors: Vector[(Body, Vector[Prim])] =
-      if !twoStage then Vector.empty
-      else Vector(t.firstCoupling, t.secondCoupling).flatMap(Coupling.bodyPair)
-        .filter((a, b) => t.presentBodies.contains(a) && t.presentBodies.contains(b))
-        .map((a, b) => a -> connector(a, b))
+      slots.flatMap((slot, c) => Coupling.bodyPair(c).map(slot -> _))
+        .filter { case (_, (a, b)) => t.presentBodies.contains(a) && t.presentBodies.contains(b) }
+        .map { case (slot, (a, b)) => a -> connector(a, b, slotTone(slot)) }
 
     val clusters = clusterBodies(d).map { group =>
       val role = Vector(BodyRole.Input, BodyRole.Output, BodyRole.Fixed)
@@ -219,13 +225,12 @@ object Layout3D:
         case b @ Body.C2 if !stacked     => planetParts(b, 2)
         case _                           => Vector.empty
       }
-      Cluster(group, group.head, role,
-        group.flatMap(bodyPrims(_, role)) ++ connectors.collect { case (a, ps) if group.contains(a) => ps }.flatten,
-        planets)
+      Cluster(group, group.head, role, group.flatMap(bodyPrims(_, role)),
+        connectors.collect { case (a, ps) if group.contains(a) => ps }.flatten, planets)
     }
 
     Layout(w, gap, z1, Option.when(twoStage)(z2), plateZ(1)._1, if twoStage then plateZ(2)._2 else z1 + w,
-      outerR, clusters)
+      outerR, clusters, slots)
 
   /** Rotation about z of a cluster, in the schematic's clockwise-positive convention. */
   def clusterAngle(c: Cluster, a: BodyAngles): Double = a.of(c.angleBody)

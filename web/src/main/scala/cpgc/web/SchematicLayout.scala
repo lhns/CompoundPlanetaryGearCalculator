@@ -325,31 +325,34 @@ object SchematicLayout:
     var k = 0
     while k < teeth do
       val thetaC = k * toothPitch + rotateRad
+      // Counter-clockwise per tooth: left flank up, tip, right flank down, then the trough to the next
+      // tooth. (`externalGearPath` visits the same vertices in a different order, which crosses itself
+      // and only fills correctly under SVG's non-zero rule; an extrusion needs a simple polygon.)
+      if r.root < r.base then addPolar(r.root, thetaC - deltaBase)
       var s = 0
       while s < FlankSamples do
         val rr = rFlankStart + (s.toDouble / (FlankSamples - 1)) * flankSpan
-        addPolar(rr, thetaC + deltaBase - inv(alphaAt(rr)))
+        addPolar(rr, thetaC - deltaBase + inv(alphaAt(rr)))
         s += 1
       val alphaA        = alphaAt(r.outer)
       val thetaRightTop = thetaC + deltaBase - inv(alphaA)
       val thetaLeftTop  = thetaC - deltaBase + inv(alphaA)
       s = 1
       while s <= TipSamples do
-        addPolar(r.outer, thetaRightTop + (s.toDouble / (TipSamples + 1)) * (thetaLeftTop - thetaRightTop))
+        addPolar(r.outer, thetaLeftTop + (s.toDouble / (TipSamples + 1)) * (thetaRightTop - thetaLeftTop))
         s += 1
       s = 0
       while s < FlankSamples do
         val rr = rFlankStart + (1.0 - s.toDouble / (FlankSamples - 1)) * flankSpan
-        addPolar(rr, thetaC - deltaBase + inv(alphaAt(rr)))
+        addPolar(rr, thetaC + deltaBase - inv(alphaAt(rr)))
         s += 1
-      val thetaLeftBase = thetaC - deltaBase
-      if r.root < r.base then addPolar(r.root, thetaLeftBase)
-      val thetaNextRightBase = thetaC + toothPitch + deltaBase
+      val thetaRightBase = thetaC + deltaBase
+      if r.root < r.base then addPolar(r.root, thetaRightBase)
+      val thetaNextLeftBase = thetaC + toothPitch - deltaBase
       s = 1
       while s < TroughSamples do
-        addPolar(r.root, thetaLeftBase + (s.toDouble / TroughSamples) * (thetaNextRightBase - thetaLeftBase))
+        addPolar(r.root, thetaRightBase + (s.toDouble / TroughSamples) * (thetaNextLeftBase - thetaRightBase))
         s += 1
-      if r.root < r.base then addPolar(r.root, thetaNextRightBase)
       k += 1
     out.result()
 
