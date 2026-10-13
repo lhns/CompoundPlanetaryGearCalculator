@@ -1,6 +1,6 @@
 package cpgc.kinematics
 
-import cpgc.constraints.{Body, BodyRole, Topology}
+import cpgc.constraints.{Body, Topology}
 import cpgc.domain.*
 import cpgc.physics.Efficiency
 import cpgc.search.RoleSolver
@@ -12,7 +12,7 @@ class RoleKinematicsSpec extends FunSuite:
   private val Seed = 7L
 
   /** A complete-enough design builder for kinematic tests: the test only reads
-    * tooth counts and the mode, so module / spacing / efficiency placeholders
+    * tooth counts and the mode, so module / efficiency placeholders
     * are fine. Returns `None` if the ratio formula is degenerate (e.g. `r12 = 0`
     * for the chosen tooth counts); the test caller skips those samples. */
   private def designOpt(mode: Mode, s1: GearSet, s2: Option[GearSet]): Option[CompoundDesign] =
@@ -23,9 +23,7 @@ class RoleKinematicsSpec extends FunSuite:
         stage2     = s2.map(g => Stage(g, Module(1.0))),
         topology   = topology,
         ratio      = ratio,
-        efficiency = Efficiency.overall(topology),
-        spacingOk  = true,
-        profileShiftHint = None
+        efficiency = Efficiency.overall(topology)
       )
     }
 
@@ -60,12 +58,9 @@ class RoleKinematicsSpec extends FunSuite:
         s"$ctx: $name diverged by ${x - y}: expected $x, got $y")
     }
 
-  // ---- Baseline: ensure the new Kinematics.at agrees with itself across modes
-  // by comparing different parameterisations. (We don't have a separate
-  // legacy implementation to diff against — the old code was overwritten in
-  // D3. The four canonical-ratio tests in `KinematicsSpec` already verify the
-  // observed ratio matches `design.ratio`, which is the consumer-facing
-  // invariant. Here we add invariants that hold for ALL topologies.) ----
+  // ---- Invariants that hold for ALL topologies. `KinematicsSpec` and
+  // `verify/AnimationConsistencySpec` check the observed ratio against
+  // `design.ratio`. ----
 
   test("input body angle equals phi exactly for all four legacy modes") {
     val rng = new Random(Seed)
