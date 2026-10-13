@@ -88,5 +88,9 @@ A new coupling, topology, formula or search rule counts as verified when:
    assembly oracle), or the gap is listed in section 3.
 3. Edge cases are tested; real bugs go in the bug register with a failing test first.
 4. Any new preset is added to `Topology` (the UI and `AnimationConsistencySpec` both read it).
+5. Every concept has exactly one production implementation (spacing, modules, ring OD, dedup key,
+   tooth phasing, validation), and oracles check what the engine actually emits. A helper only
+   tests call is a warning sign: the search once used an inline copy of the spacing rule while
+   the oracle tests checked an unused helper.
 
 A change that lowers a component's coverage is a regression and should be called out in review.
