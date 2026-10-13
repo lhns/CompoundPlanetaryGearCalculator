@@ -68,8 +68,9 @@ object Scorer:
     if targets.isEmpty || k <= 0 then Map.empty
     else
       val accs = targets.distinct.map(t => t -> new TopK[Scored](k))
+      val ids  = scala.collection.mutable.HashMap.empty[Any, Long]
       designs.foreach { d =>
-        val key = canonicalKey(d)
+        val key = ids.getOrElseUpdate(canonicalKey(d), ids.size.toLong)
         for (t, acc) <- accs do
           val e = absoluteError(t, d.ratio)
           acc.offer(e, key, Scored(t, e, d))
