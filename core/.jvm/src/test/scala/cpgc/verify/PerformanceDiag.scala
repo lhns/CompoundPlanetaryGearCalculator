@@ -35,9 +35,10 @@ class PerformanceDiag extends FunSuite:
     val r  = body
     (r, (System.nanoTime() - t0) / 1e9)
 
-  private def measure(label: String, cfg: SearchConfig, sort: SortBy = SortBy.BestFit): Double =
-    val (e0, cold) = time(Calculator.engine(cfg, sort, 10).run())
-    val warm = (1 to 3).map(_ => time(Calculator.engine(cfg, sort, 10).run())._2).min
+  private def measure(label: String, cfg: SearchConfig, sort: SortBy = SortBy.BestFit, k: Int = 10): Double =
+    def runOnce() = { val e = Calculator.engine(cfg, sort, k).run(); e.top; e.perTarget; e }
+    val (e0, cold) = time(runOnce())
+    val warm = (1 to 3).map(_ => time(runOnce())._2).min
     println(f"  $label%-34s cold=$cold%6.2fs warm=$warm%6.2fs examined=${e0.examined}%9d found=${e0.found}%8d")
     cold
 
@@ -53,10 +54,11 @@ class PerformanceDiag extends FunSuite:
   }
 
   test("diagnostic: web default ranges (sun 10-40, planet 10-18, ring 40-120, planets 3-4), all presets".tag(diagnostic)) {
-    println("Web defaults (JVM proxy; browser ~2-3x slower):")
+    println("Web defaults, TopK = 16000 (JVM proxy; browser ~2-3x slower):")
     val base = SearchConfig(
       sunTeeth = TeethBounds(10, 40), planetTeeth = TeethBounds(10, 18), ringTeeth = TeethBounds(40, 120),
       planets = TeethBounds(3, 4), sunPlanetFactor = 1e9, targets = Seq(Ratio(53.12)))
-    val worst = presets.map((n, t) => measure(n, base.copy(topology = t))).max
-    println(f"  worst cold = $worst%.2fs (budget ~2 s)")
+    val worst = presets.map((n, t) => measure(n, base.copy(topology = t), k = 16000)).max
+    val sunless = measure("cdcp sun-less", base.copy(topology = Topology.sunlessCdcpCompound), k = 16000)
+    println(f"  worst cold = ${worst max sunless}%.2fs (budget ~2 s)")
   }

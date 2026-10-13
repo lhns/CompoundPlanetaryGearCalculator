@@ -98,14 +98,21 @@ object Compounder:
 
   /** The design for a candidate `Evaluator.accept` approved. */
   def design(cfg: SearchConfig, s1: GearSet, s2: Option[GearSet], ev: Evaluator): CompoundDesign =
+    design(cfg, s1, s2, ev.ratio, ev.wellConditioned, ev.module1, ev.module2)
+
+  /** Same, from a captured evaluator result (lets the engine defer materialisation). */
+  def design(
+      cfg: SearchConfig, s1: GearSet, s2: Option[GearSet],
+      ratio: Double, wellConditioned: Boolean, module1: Double, module2: Double
+  ): CompoundDesign =
     val topology = cfg.topology
-    val r = Ratio.unsafe(ev.ratio)
+    val r = Ratio.unsafe(ratio)
     val validity = s2 match
-      case Some(g) => classifyDegeneracies(topology, s1, g, ev.ratio, ev.wellConditioned)
-      case None    => if ev.wellConditioned then Validity.Ok else Validity.Warning(NearSingular)
+      case Some(g) => classifyDegeneracies(topology, s1, g, ratio, wellConditioned)
+      case None    => if wellConditioned then Validity.Ok else Validity.Warning(NearSingular)
     CompoundDesign(
-      stage1           = Stage(s1, Module.unsafe(ev.module1), cfg.ringWall),
-      stage2           = s2.map(g => Stage(g, Module.unsafe(ev.module2), cfg.ringWall)),
+      stage1           = Stage(s1, Module.unsafe(module1), cfg.ringWall),
+      stage2           = s2.map(g => Stage(g, Module.unsafe(module2), cfg.ringWall)),
       topology         = topology,
       ratio            = r,
       efficiency       = Efficiency.overall(topology),
