@@ -4,9 +4,9 @@ import cpgc.domain.{CompoundDesign, Stage}
 
 object Csv:
 
-  /** Columns 1..13 are stable; topology columns are appended. */
+  /** Topology columns are appended after the per-stage columns. */
   private val Header: String =
-    "mode,ratio,efficiency,planets,spacingOk," +
+    "mode,ratio,efficiency,planets," +
       "sun1,planet1,ring1,module1," +
       "sun2,planet2,ring2,module2," +
       "input,output,fixed,firstCoupling,secondCoupling,absentSuns"
@@ -18,7 +18,7 @@ object Csv:
       case None    => ",,,"
     val t = d.topology
     s"${d.modeName},${fmt(d.ratio.value)},${fmt(d.efficiency)}," +
-      s"${s1.set.numPlanets},${d.spacingOk}," +
+      s"${s1.set.numPlanets}," +
       stageCells(s1, t.s1Present) + "," + s2Cells + "," +
       Seq(
         TopologyInfo.input(t), TopologyInfo.output(t), TopologyInfo.fixed(t),

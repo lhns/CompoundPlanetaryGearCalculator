@@ -13,7 +13,7 @@ object ExportFixtures:
     * so it satisfies the stacked-planet assembly condition. */
   val standard: CompoundDesign = CompoundDesign(
     stage(25, 11, 3, 2.0), Some(stage(26, 10, 3, 2.0)),
-    Topology.standardCompound, Ratio(12.5), 0.9, true, None
+    Topology.standardCompound, Ratio(12.5), 0.9
   )
 
   /** NSS: stage 2 has no sun (virtual 26). */
@@ -27,7 +27,7 @@ object ExportFixtures:
     standard.copy(topology = Topology.withAbsentSuns(Topology.cdcpCompound, true, false).toOption.get)
 
   val single: CompoundDesign =
-    CompoundDesign(stage(24, 12, 3, 2.5), None, Topology.singleStage, Ratio(3.0), 0.97, true, None)
+    CompoundDesign(stage(24, 12, 3, 2.5), None, Topology.singleStage, Ratio(3.0), 0.97)
 
   val all: Vector[(String, CompoundDesign)] = Vector(
     "standard" -> standard, "nss" -> nss, "sunless" -> sunless, "s1Absent" -> s1Absent, "single" -> single

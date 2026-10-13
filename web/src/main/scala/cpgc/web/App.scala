@@ -3,7 +3,7 @@ package cpgc.web
 import com.raquo.laminar.api.L.*
 import cpgc.Calculator
 import cpgc.constraints.{Body, BodyRole, Coupling, SearchConfig, Topology}
-import cpgc.domain.{CompoundDesign, ProfileShift, Validity}
+import cpgc.domain.{CompoundDesign, Validity}
 import cpgc.`export`.{Csv, Json, OpenScad}
 import cpgc.search.Scorer
 import cpgc.search.Scorer.SortBy
@@ -495,14 +495,10 @@ object App:
     val mods = d.stage2 match
       case Some(b) => s"   m₁=${fmt3(s1.module.value)} m₂=${fmt3(b.module.value)}"
       case None    => s"   m=${fmt3(s1.module.value)}"
-    val shift = d.profileShiftHint match
-      case Some(ProfileShift(x1, x2, alpha)) =>
-        f"   shift x₁=$x1%.3f x₂=$x2%.3f α'=$alpha%.2f°"
-      case None => ""
     val warn = d.validity match
       case Validity.Warning(reason) => s"   ⚠ $reason"
       case Validity.Ok              => ""
-    base + mods + shift + warn
+    base + mods + warn
 
   private def fmt3(d: Double): String =
     val rounded = math.round(d * 1000).toDouble / 1000.0
@@ -526,7 +522,6 @@ object App:
           th(titleAttr := "Overall reduction ratio (input speed ÷ output speed).", "ratio"),
           th(titleAttr := "Estimated mechanical efficiency, from the count and types of meshes.", "eff"),
           th(titleAttr := "Number of planets in stage 1.", "N"),
-          th(titleAttr := "Even-spacing check: whether all N planets fit symmetrically.", "spacing"),
           th(titleAttr := "Stage 1 sun gear tooth count (— when stage 1 has no sun).", "S₁"),
           th(titleAttr := "Stage 1 planet gear tooth count.", "P₁"),
           th(titleAttr := "Stage 1 ring gear tooth count.", "R₁"),
@@ -553,7 +548,6 @@ object App:
               td(cls := "num", fmtRatio(d.ratio.value)),
               td(cls := "num", UiLogic.fmtEfficiency(d.efficiency)),
               td(d.stage1.set.numPlanets.toString),
-              td(if d.spacingOk then "ok" else "—"),
               td(if d.topology.s1Present then d.stage1.set.sun.toInt.toString else "—"),
               td(d.stage1.set.planet.toInt.toString),
               td(d.stage1.set.ring.toInt.toString),
