@@ -25,3 +25,4 @@ assembled. The smallest counterexample is `Tp1 = Tp2 = 6, Tr1 = 18, Tr2 = 19, N 
   rest at the cost of N different planet parts.
 - The `SpacingExperimentSpec` diagnostic (now deleted; `AssemblyConditionSpec` replaces it) and ADR 0012's claim that the residuals were "artefacts" were wrong. Those
   residuals were this condition.
+- Exports carry the assembly mode: `CompoundDesign.phasedPinions`; CSV/JSON add `assembly` and per-planet `twists` (degrees), and OpenSCAD emits per-planet `planet_rot` for both halves plus `planet_twist`, from the shared `render.Phasing` solver (also used by the schematic).

@@ -1,12 +1,13 @@
 package cpgc.`export`
 
 import cpgc.domain.{CompoundDesign, Stage}
+import cpgc.render.Phasing
 
 /** Emit a parametric OpenSCAD script that describes the geometry of a winning
   * compound design. Uses the popular `gears.scad` API conventions; users supply
   * the library themselves (e.g. `use <gears.scad>` from Chris Wallace / nophead).
   *
-  * ## Phasing (docs/verification/assembly-conditions.md)
+  * ## Phasing (docs/verification/assembly-conditions.md, `render.Phasing`)
   *
   * Library assumption (Janssen / Wallace `gears.scad`, not available at build
   * time, so unverified by test): `spur_gear` at rotation 0 has a tooth centred on
@@ -16,83 +17,21 @@ import cpgc.domain.{CompoundDesign, Stage}
   * differently, all gears are off by a constant and only the `*_rot` values below
   * need shifting.
   *
-  * Angles are in turns, a gear with `T` teeth at rotation `a` has phase
-  * `frac(T·(θ − a))` towards direction θ (0 = tooth centred). Planet k sits at
-  * θ_k = k/N with body angle x_k. The sun meshes at θ_k, the planet faces it
-  * from θ_k + ½:
-  *
-  *   sun :  Ts·(θ_k − σ) + Tp·(θ_k + ½ − x_k) ≡ ½
-  *   ring:  Tr·(θ_k − ρ) − Tp·(θ_k − x_k)     ≡ ½      (ρ = ring rotation + 1/(2Tr))
-  *
-  * Planet 0 is pinned at x_0 = 0, which fixes σ and ρ. Each further planet then
-  * needs Tp·x_k ≡ rhs_k (mod 1) for every congruence it takes part in; a
-  * stacked pinion shares one x_k between both stages, so it must satisfy the
-  * congruences of both. Candidates x = (rhs + j)/Tp are tried until all hold,
-  * which is possible exactly when the assembly condition of the design holds;
-  * otherwise the script says so and phasing is best-effort.
+  * `Phasing.solve` gives the tooth-centre angles; the ring's `ring_gear` rotation
+  * is its material tooth centre minus half a pitch. For stacked designs with
+  * individually phased pinions (ADR 0018) each planet has two body angles, one per
+  * half, and `planet_twist` (stage 2) lists half 2's rotation relative to half 1.
+  * If a design violates its assembly condition the script says so and phasing is
+  * best-effort.
   */
 object OpenScad:
 
-  /** Tp·x ≡ rhs(k) (mod 1), all in turns. */
-  private final case class Cong(tp: Int, rhs: Int => Double)
-
-  /** Per-stage phasing in degrees. `planetRot` holds the absolute body angle of each planet. */
-  private final case class StagePhase(sunRot: Option[Double], ringRot: Double, congs: Seq[Cong], n: Int)
-
-  private val Tol = 1e-6
-
-  private def isInteger(v: Double): Boolean =
-    val f = v - math.floor(v)
-    f < Tol || f > 1.0 - Tol
-
-  /** Fractional part, with values within 1e-9 of 0 or 1 snapped to 0. */
-  private def fracSnap(v: Double): Double =
-    val f = v - math.floor(v)
-    if f < 1e-9 || f > 1.0 - 1e-9 then 0.0 else f
-
   /** `turns` reduced modulo one pitch of a `t`-tooth gear, in degrees. */
-  private def pitchDeg(turns: Double, t: Int): Double = fracSnap(turns * t) / t * 360.0
-
-  private def plan(s: Stage, sunPresent: Boolean): StagePhase =
-    val (ts, tp, tr, n) = (s.set.sun.toInt, s.set.planet.toInt, s.set.ring.toInt, s.set.numPlanets)
-    val sigma = (tp / 2.0 - 0.5) / ts
-    val rho   = -0.5 / tr
-    val ring  = Cong(tp, k => { val th = k.toDouble / n; 0.5 - tr * (th - rho) + tp * th })
-    val sun   = Cong(tp, k => { val th = k.toDouble / n; ts * (th - sigma) + tp * (th + 0.5) - 0.5 })
-    StagePhase(
-      sunRot  = if sunPresent then Some(pitchDeg(sigma, ts)) else None,
-      ringRot = pitchDeg(rho - 1.0 / (2.0 * tr), tr),
-      congs   = if sunPresent then Seq(ring, sun) else Seq(ring),
-      n       = n
-    )
-
-  /** Absolute planet body angles in turns, and whether every planet could be phased. */
-  private def solvePlanets(congs: Seq[Cong], n: Int): (Vector[Double], Boolean) =
-    val first = congs.head
-    val xs = (0 until n).map { k =>
-      val base = fracSnap(first.rhs(k)) / first.tp
-      (0 until first.tp).map(j => base + j.toDouble / first.tp)
-        .find(x => congs.forall(c => isInteger(c.tp * x - c.rhs(k))))
-        .map(_ -> true).getOrElse(base -> false)
-    }
-    (xs.map(_._1).toVector, xs.forall(_._2))
+  private def pitchDeg(turns: Double, t: Int): Double = Phasing.fracSnap(turns * t) / t * 360.0
 
   def emit(d: CompoundDesign, includePath: String = "gears.scad"): String =
-    val t = d.topology
-    val p1 = plan(d.stage1, t.s1Present)
-    val p2 = d.stage2.map(plan(_, t.s2Present))
-    val (rot1, ok1, rot2, ok2) = p2 match
-      case Some(q) if t.stacked =>
-        // one stepped pinion per planet: a single body angle must satisfy both stages
-        val (x, ok) = solvePlanets(p1.congs ++ q.congs, p1.n)
-        (x, ok, x, ok)
-      case Some(q) =>
-        val (x1, o1) = solvePlanets(p1.congs, p1.n)
-        val (x2, o2) = solvePlanets(q.congs, q.n)
-        (x1, o1, x2, o2)
-      case None =>
-        val (x1, o1) = solvePlanets(p1.congs, p1.n)
-        (x1, o1, Vector.empty[Double], true)
+    val t  = d.topology
+    val ph = Phasing.solve(d)
 
     val absent = TopologyInfo.absentSuns(t)
     val couplings = (TopologyInfo.firstCoupling(t), TopologyInfo.secondCoupling(t)) match
@@ -104,6 +43,7 @@ object OpenScad:
       s"// Mode: ${d.modeName} Ratio: ${Numeric.fixed(d.ratio.value, 4)}:1   Eff: ${Numeric.fixed(d.efficiency, 3)}",
       s"// Topology: input ${TopologyInfo.input(t)}, output ${TopologyInfo.output(t)}, fixed ${TopologyInfo.fixed(t)}, " +
         s"couplings $couplings, absent suns: ${if absent.isEmpty then "none" else absent.mkString(", ")}",
+      s"// Assembly: ${assemblyNote(d)}",
       "// Layout: the stages are coaxial about the Z axis and separated along +Z (stage 2 above stage 1).",
       "// Couplings that weld central shafts (Ring-Sun, Ring-Ring, Sun-Sun, ...) are not modelled;",
       "// stage 2's rotation relative to stage 1 is arbitrary and is set by the weld.",
@@ -114,14 +54,19 @@ object OpenScad:
     )
     val sb = StringBuilder()
     sb ++= header.mkString("\n") ++= "\n"
-    sb ++= stageBlock("stage1", d.stage1, p1, rot1, ok1, zOffset = 0.0, t.s1Present)
-    d.stage2.zip(p2).foreach { (s2, q) =>
+    sb ++= stageBlock("stage1", d.stage1, ph.stage1, ph.meshes, zOffset = 0.0, t.s1Present, None)
+    d.stage2.zip(ph.stage2).foreach { (s2, q) =>
       sb ++= "\n"
-      sb ++= stageBlock("stage2", s2, q, rot2, ok2, zOffset = z1 + 2.0, t.s2Present)
+      sb ++= stageBlock("stage2", s2, q, ph.meshes, zOffset = z1 + 2.0, t.s2Present, ph.twists)
     }
     sb ++= "\nstage1();\n"
     if d.stage2.isDefined then sb ++= "stage2();\n"
     sb.toString
+
+  private def assemblyNote(d: CompoundDesign): String =
+    if TopologyInfo.assembly(d) == "phased" then
+      "individually phased pinions (N different planet parts; planet_twist gives each planet's half-2 twist)"
+    else "identical pinions (one planet part printed N times)"
 
   private def stageHeight(s: Stage): Double = math.max(6.0, s.module.value * 6.0)
 
@@ -134,33 +79,37 @@ object OpenScad:
     if b < 1.0 then 0.0 else b
 
   private def stageBlock(
-      name: String, s: Stage, ph: StagePhase, planetRot: Vector[Double], phased: Boolean,
-      zOffset: Double, sunPresent: Boolean
+      name: String, s: Stage, ph: Phasing.StagePhasing, meshes: Boolean,
+      zOffset: Double, sunPresent: Boolean, twists: Option[Vector[Double]]
   ): String =
     val z      = stageHeight(s)
     val m      = s.module.value
     val (sun, planet, ring, n) = (s.set.sun.toInt, s.set.planet.toInt, s.set.ring.toInt, s.set.numPlanets)
-    val rimWidth = (s.ringOuterDiameter - m * (ring + 2.5)) / 2.0
+    val rimWidth = s.ringWall // ring OD = m·(Tr+2.5) + 2·wall, so the rim beyond the roots is the wall
     val common = s"modul=${n6(m)}, width=${n6(z)}"
     // A sun-less stage has no sun gear (its tooth count is only a virtual one).
-    val sunLines = ph.sunRot match
-      case Some(rot) if sunPresent =>
+    val sunLines = ph.sun match
+      case Some(sigma) if sunPresent =>
         Vector(
-          s"    sun_rot = ${n6(rot)};",
+          s"    sun_rot = ${n6(pitchDeg(sigma, sun))};",
           s"    rotate([0, 0, sun_rot]) spur_gear($common, tooth_number=$sun, bore=${n6(bore(4.0, sun, m))}, pressure_angle=20, helix_angle=0, optimized=false); // sun_gear"
         )
       case _ => Vector("    // (no sun gear in this stage)")
     val warn =
-      if phased then Vector.empty
+      if meshes then Vector.empty
       else Vector("    // WARNING: these planets cannot all mesh (assembly condition violated); phasing is best-effort.")
+    val twistLine = twists.toVector.map(tw =>
+      s"    planet_twist = [${tw.map(x => n6(x * 360.0)).mkString(", ")}]; // half 2 relative to half 1 (deg), per planet")
+    val ringRot = pitchDeg(ph.ring - 1.0 / (2.0 * ring), ring)
     val lines = Vector(
       s"module $name() {",
       s"  // Ts=$sun Tp=$planet Tr=$ring N=$n module=${n6(m)}",
       s"  translate([0, 0, ${n6(zOffset)}]) {",
-      s"    center_distance = ${n6(m * (sun + planet) / 2.0)};",
+      s"    center_distance = ${n6(s.centerToCenter)};",
       s"    ring_od = ${n6(s.ringOuterDiameter)}; // m*(Tr+2.5) + 2*wall (ADR 0016)"
     ) ++ warn ++ sunLines ++ Vector(
-      s"    planet_rot = [${planetRot.map(x => n6(x * 360.0)).mkString(", ")}]; // absolute body angle (deg)",
+      s"    planet_rot = [${ph.planets.map(x => n6(x * 360.0)).mkString(", ")}]; // absolute body angle (deg)"
+    ) ++ twistLine ++ Vector(
       "    // planets",
       s"    for (i = [0:${n - 1}])",
       s"      rotate([0, 0, i * 360 / $n])",
@@ -168,7 +117,7 @@ object OpenScad:
       s"          rotate([0, 0, planet_rot[i] - i * 360 / $n])",
       s"            spur_gear($common, tooth_number=$planet, bore=${n6(bore(3.0, planet, m))}, pressure_angle=20, helix_angle=0, optimized=false);",
       "    // ring",
-      s"    ring_rot = ${n6(ph.ringRot)};",
+      s"    ring_rot = ${n6(ringRot)};",
       s"    rotate([0, 0, ring_rot]) ring_gear($common, tooth_number=$ring, rim_width=${n6(rimWidth)}, pressure_angle=20, helix_angle=0);",
       "  }",
       "}",

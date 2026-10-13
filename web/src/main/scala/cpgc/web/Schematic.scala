@@ -6,7 +6,8 @@ import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
 import cpgc.domain.{CompoundDesign, Mode, Stage}
 import cpgc.kinematics.{BodyAngles, Kinematics}
 import cpgc.render.GearGeometry
-import cpgc.render.GearGeometry.{planetPhaseOffset, ringPhaseOffset, gearRadii as coreGearRadii}
+import cpgc.render.GearGeometry.{gearRadii as coreGearRadii}
+import cpgc.render.Phasing
 
 /** Animated SVG schematic. Static layout is rebuilt only when the selected
   * design changes; the per-frame `phase` signal only updates `transform`
@@ -202,15 +203,18 @@ object Schematic:
     val angles: Signal[BodyAngles] = phaseSignal.map(Kinematics.at(d, _))
     val roles = rolesFor(topology)
 
+    // Tooth phasing shared with the OpenSCAD export, so drawn teeth mesh in every valid design.
+    val phasing = Phasing.solve(d)
+
     val s1 = stageGroup(d.stage1, cx1, "Stage 1", Stage1Sun, Stage1Planet, Stage1Ring,
-                        angles, stageIndex = 1, showSun = topology.s1Present,
+                        angles, stageIndex = 1, showSun = topology.s1Present, phasing = phasing.stage1,
                         sunRole = roles.stage1Sun,
                         carrierRole = roles.stage1Carrier,
                         ringRole = roles.stage1Ring)
-    val s2 = d.stage2.map(st2 =>
+    val s2 = d.stage2.zip(phasing.stage2).map((st2, ph2) =>
       stageGroup(st2, cx2, "Stage 2", Stage2Sun, Stage2Planet, Stage2Ring,
                  angles, stageIndex = 2,
-                 showSun = topology.s2Present,
+                 showSun = topology.s2Present, phasing = ph2,
                  sunRole = roles.stage2Sun,
                  carrierRole = roles.stage2Carrier,
                  ringRole = roles.stage2Ring))
@@ -289,14 +293,24 @@ object Schematic:
           label(Coupling.label(other))
         )
 
-  private def headerBanner(d: CompoundDesign): Vector[SvgElement] =
-    val title = d.topology.legacyMode match
+  /** Schematic title: the preset name when the topology is a named one, else a generic description. */
+  def title(d: CompoundDesign): String =
+    d.topology.legacyMode match
       case Some(Mode.SingleStage) => "Single-stage planetary"
       case Some(Mode.Standard)    => "Compound planetary (sun-driven)"
       case Some(Mode.CDCP)        => "Carrier-driven compound planetary"
       case Some(Mode.NSS)         => "Compound planetary (no second sun)"
       case None if d.topology == Topology.sunlessCdcpCompound => "Carrier-driven compound planetary (sun-less)"
-      case None                   => if d.stage2.isEmpty then "Single-stage planetary (custom roles)" else "Compound planetary (custom topology)"
+      case None =>
+        UiLogic.topologyPreset(d.topology) match
+          case GearboxPreset.RingToSunCascade => "Ring-to-sun cascade compound"
+          case GearboxPreset.Ravigneaux       => "Ravigneaux compound planetary"
+          case GearboxPreset.Simpson          => "Simpson compound planetary"
+          case _ =>
+            if d.stage2.isEmpty then "Single-stage planetary (custom roles)" else "Compound planetary (custom topology)"
+
+  private def headerBanner(d: CompoundDesign): Vector[SvgElement] =
+    val title = Schematic.title(d)
     Vector(
       s.text(
         s.x := "0", s.y := "-138", s.textAnchor := "middle",
@@ -312,7 +326,7 @@ object Schematic:
           val r = d.ratio.value
           val sign = if r < 0 then "−" else ""
           val arrow = if r < 0 then " ↺" else ""
-          f"ratio $sign${math.abs(r)}%.3f : 1$arrow     η ${UiLogic.fmtEfficiency(d.efficiency)}     N=${d.stage1.set.numPlanets}"
+          f"ratio $sign${math.abs(r)}%.3f : 1$arrow     η ${UiLogic.fmtEfficiency(d.efficiency)}     N=${UiLogic.planetCountLabel(d)}"
         }
       )
     )
@@ -578,10 +592,14 @@ object Schematic:
       angles: Signal[BodyAngles],
       stageIndex: Int,
       showSun: Boolean,
+      phasing: Phasing.StagePhasing,
       sunRole: Role,
       carrierRole: Role,
       ringRole: Role,
   ): Vector[SvgElement] =
+    // Planet i is drawn at angle 2πi/N − π/2, i.e. the phasing frame (planet k at k/N turns)
+    // rotated by a quarter turn; mesh conditions are invariant under that common shift.
+    def toRad(turns: Double): Double = 2.0 * math.Pi * (turns - 0.25)
     val targetOuterR = 95.0
     val rawOuterR    = stage.ringOuterDiameter / 2.0
     val scale        = targetOuterR / rawOuterR
@@ -592,7 +610,7 @@ object Schematic:
     val planetPitchR = mPx * stage.set.planet.toDouble / 2.0
     val ringPitchR   = mPx * stage.set.ring.toDouble / 2.0
     // Ring's outer rim flush with the polygon's back-of-tooth (dedendum).
-    val ringOR    = mPx * stage.set.ring.toDouble / 2.0 + 1.25 * mPx
+    val ringOR    = coreGearRadii(stage.set.ring.toInt, mPx, internal = true).root
     val carrierR  = px(stage.centerToCenter)
     val n         = stage.set.numPlanets
 
@@ -630,15 +648,8 @@ object Schematic:
       ),
       // Inner pitch circle (faint)
       pitchCircle(cx, 0, ringPitchR),
-      // Involute inner tooth profile — static phase offset so planet-ring mesh
-      // satisfies the internal-mesh phase relation `f_r − f_p_outward ≡ 0.5`.
-      involuteRing(
-        cx, 0, stage.set.ring.toInt, mPx, ringStroke,
-        rotateRad = ringPhaseOffset(
-          stage.set.sun.toInt, stage.set.planet.toInt, stage.set.ring.toInt,
-          -math.Pi / 2.0
-        )
-      )
+      // Involute inner tooth profile, static phase from `Phasing` so every planet-ring mesh is tooth-in-gap.
+      involuteRing(cx, 0, stage.set.ring.toInt, mPx, ringStroke, rotateRad = toRad(phasing.ring))
     )
 
     // Role badge (IN / OUT) for the gear at (px, py), in role's colour.
@@ -677,7 +688,8 @@ object Schematic:
           s.fill := "url(#sun-glow)"
         ),
         pitchCircle(cx, 0, sunPitchR),
-        involuteToothedGear(cx, 0, stage.set.sun.toInt, mPx, sunStroke),
+        involuteToothedGear(cx, 0, stage.set.sun.toInt, mPx, sunStroke,
+          rotateRad = phasing.sun.fold(0.0)(toRad)),
         {
           val sunHubR = sunRole match
             case Role.Plain => 2.4
@@ -739,7 +751,7 @@ object Schematic:
           },
           pitchCircle(pxC, pyC, planetPitchR),
           involuteToothedGear(pxC, pyC, stage.set.planet.toInt, mPx, planetColor,
-            rotateRad = theta + planetPhaseOffset(stage.set.sun.toInt, stage.set.planet.toInt, theta)),
+            rotateRad = toRad(phasing.planets(i))),
           s.circle(s.cx := f"$pxC%.2f", s.cy := f"$pyC%.2f", s.r := "1.6",
                    s.fill := HubFill, s.stroke := planetColor, s.strokeWidth := "0.6")
         )

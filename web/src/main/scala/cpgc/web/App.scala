@@ -336,8 +336,8 @@ object App:
               tooltip = "Smallest acceptable gear-tooth size. 'Module' is mm of pitch diameter per tooth — a manufacturability floor.")(
               id => numInput(minModule, id)),
             labeled("Max planet/sun ratio",
-              tooltip = "Reject designs where the planet has more teeth than this multiple of the sun's teeth. Blank means unlimited.")(
-              id => input(idAttr := id, typ := "text", inputMode := "decimal", placeholder := "unlimited",
+              tooltip = "Reject designs where the planet has more teeth than this multiple of the sun's teeth. Blank uses the default (3).")(
+              id => input(idAttr := id, typ := "text", inputMode := "decimal", placeholder := SearchConfig.DefaultSunPlanetFactor.toString,
                 controlled(value <-- sunPlanetFact.signal, onInput.mapToValue --> sunPlanetFact))),
             labeled("Ring wall (mm)",
               tooltip = "Material between the ring's tooth roots and its outside diameter. The OD bounds the ring's outside.")(
@@ -491,7 +491,7 @@ object App:
 
   private def detailLine(d: CompoundDesign): String =
     val s1 = d.stage1
-    val base = s"Ratio ${fmtRatio(d.ratio.value)}:1   η ${UiLogic.fmtEfficiency(d.efficiency)}   N=${s1.set.numPlanets}"
+    val base = s"Ratio ${fmtRatio(d.ratio.value)}:1   η ${UiLogic.fmtEfficiency(d.efficiency)}   N=${UiLogic.planetCountLabel(d)}"
     val mods = d.stage2 match
       case Some(b) => s"   m₁=${fmt3(s1.module.value)} m₂=${fmt3(b.module.value)}"
       case None    => s"   m=${fmt3(s1.module.value)}"
@@ -547,7 +547,7 @@ object App:
               ),
               td(cls := "num", fmtRatio(d.ratio.value)),
               td(cls := "num", UiLogic.fmtEfficiency(d.efficiency)),
-              td(d.stage1.set.numPlanets.toString),
+              td(UiLogic.planetCountLabel(d)),
               td(if d.topology.s1Present then d.stage1.set.sun.toInt.toString else "—"),
               td(d.stage1.set.planet.toInt.toString),
               td(d.stage1.set.ring.toInt.toString),

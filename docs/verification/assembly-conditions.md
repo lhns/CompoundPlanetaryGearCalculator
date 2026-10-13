@@ -108,10 +108,12 @@ Results (diagnostic run, `-- *diagnostic*`; the default suite uses teeth 6..11 f
 
 The oracle matched the verified rule in every case. It matched for `g = 0` and `g = 5/37` turn, and
 over five offsets on teeth 6..9. Individually phased pinions matched the per-stage (production) rule
-exactly. Production never rejects an assemblable design. Single stage: all 3 125 cases (teeth 6..30,
+exactly. The pre-ADR-0018 rule never rejected an assemblable design. Single stage: all 3 125 cases (teeth 6..30,
 N 2..6) matched `(Ts+Tr) % N == 0`, which is `GearSet.evenSpacing`. Non-stacked: 300 000 cases
 (teeth 6..10, N 2..5, 18 weld pairs, with and without suns) showed 0 disagreements with the per-stage rule.
-`.fail` tests pin the production gap for Standard, NSS and sun-less CDCP.
+The production gap is fixed (ADR 0018): `AssemblyConditionSpec` checks `Compounder.satisfiesSpacing` against the
+oracle for identical and phased pinions, and checks that the search engine's output on small ranges is exactly the
+set of oracle-assemblable pairs.
 
 ## Recommendation
 
