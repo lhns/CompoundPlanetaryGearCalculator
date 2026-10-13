@@ -62,12 +62,12 @@ no test yet) · **design** (needs a decision) · **limitation** (documented, not
 ## Final review (after all fixes)
 | ID | Finding | Status |
 |---|---|---|
-| F1 | `phasedPinions` designs exported with the identical-pinion model (planets don't mesh; no per-planet twist in exports) | fix in progress |
-| F2 | Stage-2 planet count (N2) missing from tables and exports; non-stacked N1≠N2 designs look duplicated | fix in progress |
-| F3 | Efficiency sort has no tie-break (efficiency is constant per layout) | fix in progress |
-| F4 | Oracle tests check `satisfiesSpacing`, which the search doesn't call (rule duplicated inline) | fix in progress |
-| F5 | Schematic tooth phasing assumes the sum rule (wrong teeth drawn for stacked / sun-less stages) | fix in progress |
-| F6 | Web/CLI defaults differ (sun/planet factor, OD vs ring wall check, sun range with no suns) | fix in progress |
+| F1 | `phasedPinions` designs exported with the identical-pinion model (planets don't mesh; no per-planet twist in exports) | **fixed** |
+| F2 | Stage-2 planet count (N2) missing from tables and exports; non-stacked N1≠N2 designs look duplicated | **fixed** |
+| F3 | Efficiency sort has no tie-break (efficiency is constant per layout) | **fixed** |
+| F4 | Oracle tests check `satisfiesSpacing`, which the search doesn't call (rule duplicated inline) | **fixed** |
+| F5 | Schematic tooth phasing assumes the sum rule (wrong teeth drawn for stacked / sun-less stages) | **fixed** |
+| F6 | Web/CLI defaults differ (sun/planet factor, OD vs ring wall check, sun range with no suns) | **fixed** |
 | F7 | Efficiency counts an idle (Free, unloaded) sun mesh, e.g. S2 in Standard | limitation (part of D4) |
 
 ## Physics, geometry, export
