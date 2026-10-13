@@ -5,7 +5,7 @@ import cpgc.domain.{CompoundDesign, Stage}
 object Pretty:
 
   private val Columns: Vector[String] = Vector(
-    "Mode", "Ratio", "Eff", "N",
+    "Mode", "Ratio", "Eff", "N", "N2",
     "S1", "P1", "R1", "M1",
     "S2", "P2", "R2", "M2",
     "Layout", "No sun"
@@ -46,6 +46,7 @@ object Pretty:
       fmt(d.ratio.value),
       fmt(d.efficiency),
       s1.set.numPlanets.toString,
+      d.stage2.fold("-")(_.set.numPlanets.toString),
       sunCell(s1, d.topology.s1Present),
       s1.set.planet.toInt.toString,
       s1.set.ring.toInt.toString,

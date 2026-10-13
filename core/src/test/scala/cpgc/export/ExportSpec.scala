@@ -3,6 +3,7 @@ package cpgc.`export`
 import cpgc.Calculator
 import cpgc.constraints.{SearchConfig, TeethBounds, Topology}
 import cpgc.domain.CompoundDesign
+import cpgc.search.Scorer
 import munit.FunSuite
 
 class ExportSpec extends FunSuite:
@@ -14,8 +15,8 @@ class ExportSpec extends FunSuite:
   // -- P1: sun-less stages never show a sun -----------------------------------
 
   test("P1 CSV: sun cells are empty exactly for absent suns") {
-    // columns: mode,ratio,efficiency,planets,sun1,planet1,ring1,module1,sun2,...
-    def suns(d: CompoundDesign) = (csvCells(d)(4), csvCells(d)(8))
+    // columns: mode,ratio,efficiency,planets,planets2,sun1,planet1,ring1,module1,sun2,...
+    def suns(d: CompoundDesign) = (csvCells(d)(5), csvCells(d)(9))
     assertEquals(suns(standard), ("25", "26"))
     assertEquals(suns(nss), ("25", ""))
     assertEquals(suns(s1Absent), ("", "26"))
@@ -33,8 +34,8 @@ class ExportSpec extends FunSuite:
   test("P1 Pretty: absent suns show a dash, never the virtual tooth count") {
     val t = Pretty.table(Seq(sunless)).linesIterator.toVector
     val cells = t(3).split('│').map(_.trim).filter(_.nonEmpty)
-    assertEquals(cells(4), "—")
-    assertEquals(cells(8), "—")
+    assertEquals(cells(5), "—")
+    assertEquals(cells(9), "—")
   }
 
   test("P1 OpenSCAD: no sun gear for sun-less stages") {
@@ -53,15 +54,68 @@ class ExportSpec extends FunSuite:
 
   test("CSV: original columns stay put, topology columns are appended") {
     val head = Csv.render(Seq(standard)).linesIterator.next()
-    assert(head.startsWith("mode,ratio,efficiency,planets,sun1,planet1,ring1,module1,sun2,planet2,ring2,module2,"))
-    assertEquals(head.split(',').toVector.drop(12),
-      Vector("input", "output", "fixed", "firstCoupling", "secondCoupling", "absentSuns"))
-    assertEquals(csvCells(standard).drop(12), Vector("S1", "R2", "R1", "CarrierToCarrier", "PlanetStack", ""))
-    assertEquals(csvCells(nss).last, "S2")
-    assertEquals(csvCells(sunless).last, "S1;S2")
-    assertEquals(csvCells(s1Absent).last, "S1")
-    assertEquals(csvCells(single).drop(12), Vector("S1", "C1", "R1", "", "", ""))
-    for (_, d) <- all do assertEquals(csvCells(d).length, 18)
+    assert(head.startsWith("mode,ratio,efficiency,planets,planets2,sun1,planet1,ring1,module1,sun2,planet2,ring2,module2,"))
+    assertEquals(head.split(',').toVector.drop(13),
+      Vector("input", "output", "fixed", "firstCoupling", "secondCoupling", "absentSuns", "assembly", "twists"))
+    assertEquals(csvCells(standard).drop(13), Vector("S1", "R2", "R1", "CarrierToCarrier", "PlanetStack", "", "identical", ""))
+    assertEquals(csvCells(nss)(18), "S2")
+    assertEquals(csvCells(sunless)(18), "S1;S2")
+    assertEquals(csvCells(s1Absent)(18), "S1")
+    assertEquals(csvCells(single).drop(13), Vector("S1", "C1", "R1", "", "", "", "identical", ""))
+    for (_, d) <- all do assertEquals(csvCells(d).length, 21)
+  }
+
+  // -- N2 and the assembly mode -------------------------------------------------
+
+  /** Non-stacked compound with N1 != N2 (a stacked one must have equal counts). */
+  private val unequalN: CompoundDesign =
+    import cpgc.constraints.{Body, BodyRole, Coupling}
+    import cpgc.domain.{GearSet, Module, Ratio, Stage, Teeth}
+    val t = Topology(
+      stages = 2,
+      roles = Map(Body.C1 -> BodyRole.Input, Body.R2 -> BodyRole.Output, Body.R1 -> BodyRole.Fixed,
+        Body.S1 -> BodyRole.Free, Body.S2 -> BodyRole.Free, Body.C2 -> BodyRole.Free),
+      firstCoupling = Coupling.CarrierToCarrier, secondCoupling = Coupling.SunToRing)
+    CompoundDesign(
+      Stage(GearSet(Teeth(25), Teeth(11), 3), Module(2.0)),
+      Some(Stage(GearSet(Teeth(26), Teeth(10), 4), Module(2.0))), t, Ratio(7.0), 0.9)
+
+  test("N2 is exported next to N in CSV, JSON and Pretty") {
+    assertEquals(csvCells(unequalN).slice(3, 5), Vector("3", "4"))
+    assertEquals(csvCells(single).slice(3, 5), Vector("3", ""))
+    val j = Json.renderOne(unequalN)
+    assert(j.contains(""""stage1":{"sun":25,"planet":11,"ring":47,"planets":3,"""), j)
+    assert(j.contains(""""stage2":{"sun":26,"planet":10,"ring":46,"planets":4,"""), j)
+    val rows = Pretty.table(Seq(unequalN)).linesIterator.toVector
+    val header = rows(1).split('│').map(_.trim).filter(_.nonEmpty)
+    val cells  = rows(3).split('│').map(_.trim).filter(_.nonEmpty)
+    assertEquals((header(3), header(4)), ("N", "N2"))
+    assertEquals((cells(3), cells(4)), ("3", "4"))
+  }
+
+  /** A stacked design that is valid only with individually phased pinions. */
+  private val phasedDesign: CompoundDesign =
+    val cfg = SearchConfig(
+      topology = Topology.standardCompound, sunTeeth = TeethBounds(8, 16), planetTeeth = TeethBounds(8, 12),
+      ringTeeth = TeethBounds(30, 60), planets = TeethBounds(3, 4))
+    val identical = Calculator.search(cfg).map(Scorer.canonicalKey).toSet
+    Calculator.search(cfg.copy(phasedPinions = true)).find(d => !identical.contains(Scorer.canonicalKey(d))).get
+
+  test("assembly mode and per-planet twists are exported (CSV, JSON, OpenSCAD header)") {
+    val cells = csvCells(phasedDesign)
+    assertEquals(cells(19), "phased")
+    val tw = cells(20).split(';').map(_.toDouble)
+    assertEquals(tw.length, phasedDesign.stage1.set.numPlanets)
+    assertEquals(tw.head, 0.0)
+    assert(tw.forall(x => x >= 0.0 && x < 360.0))
+    val j = Json.renderOne(phasedDesign)
+    assert(j.contains(""""assembly":"phased""""), j)
+    assert(j.contains(""""twists":["""), j)
+    assert(OpenScad.emit(phasedDesign).contains("// Assembly: individually phased pinions"))
+    assertEquals(csvCells(standard)(19), "identical")
+    assert(Json.renderOne(standard).contains(""""assembly":"identical","twists":[]"""))
+    // a phased flag on a non-stacked design is meaningless and is reported as identical
+    assertEquals(csvCells(unequalN.copy(phasedPinions = true))(19), "identical")
   }
 
   test("JSON: topology object") {
@@ -97,11 +151,11 @@ class ExportSpec extends FunSuite:
   }
 
   private val goldenPretty: String =
-    """┌─────────────────┬────────┬───────┬───┬────┬────┬────┬───────┬────┬────┬────┬───────┬─────────────────────────────────────────────────┬────────┐
-      |│ Mode            │ Ratio  │ Eff   │ N │ S1 │ P1 │ R1 │ M1    │ S2 │ P2 │ R2 │ M2    │ Layout                                          │ No sun │
-      |├─────────────────┼────────┼───────┼───┼────┼────┼────┼───────┼────┼────┼────┼───────┼─────────────────────────────────────────────────┼────────┤
-      |│ CDCP (sun-less) │ 12.500 │ 0.900 │ 3 │ —  │ 11 │ 47 │ 2.000 │ —  │ 10 │ 46 │ 2.000 │ C1→R2 | R1 fixed | CarrierToCarrier+PlanetStack │ S1;S2  │
-      |└─────────────────┴────────┴───────┴───┴────┴────┴────┴───────┴────┴────┴────┴───────┴─────────────────────────────────────────────────┴────────┘""".stripMargin
+    """┌─────────────────┬────────┬───────┬───┬────┬────┬────┬────┬───────┬────┬────┬────┬───────┬─────────────────────────────────────────────────┬────────┐
+      |│ Mode            │ Ratio  │ Eff   │ N │ N2 │ S1 │ P1 │ R1 │ M1    │ S2 │ P2 │ R2 │ M2    │ Layout                                          │ No sun │
+      |├─────────────────┼────────┼───────┼───┼────┼────┼────┼────┼───────┼────┼────┼────┼───────┼─────────────────────────────────────────────────┼────────┤
+      |│ CDCP (sun-less) │ 12.500 │ 0.900 │ 3 │ 3  │ —  │ 11 │ 47 │ 2.000 │ —  │ 10 │ 46 │ 2.000 │ C1→R2 | R1 fixed | CarrierToCarrier+PlanetStack │ S1;S2  │
+      |└─────────────────┴────────┴───────┴───┴────┴────┴────┴────┴───────┴────┴────┴────┴───────┴─────────────────────────────────────────────────┴────────┘""".stripMargin
 
   // -- P6: non-finite numbers -------------------------------------------------
 

@@ -110,8 +110,9 @@ class UiLogicSpec extends FunSuite:
     assertEquals(c.topPerTarget, 77)
     assertEquals(c.targets.map(_.value), Seq(100.0))
 
-  test("buildConfig: blank sunPlanetFactor means unlimited, junk is an error, a novel topology is passed through"):
-    assertEquals(cfgOf(base).sunPlanetFactor, 1e9)
+  test("buildConfig: blank sunPlanetFactor means the SearchConfig default (as in the CLI), junk is an error, a novel topology is passed through"):
+    assertEquals(cfgOf(base).sunPlanetFactor, SearchConfig().sunPlanetFactor)
+    assertEquals(cfgOf(base).sunPlanetFactor, SearchConfig.DefaultSunPlanetFactor)
     assert(buildConfig(base.copy(sunPlanetFactor = "x"), 1).isLeft)
     assert(buildConfig(base.copy(sunPlanetFactor = "0"), 1).isLeft)
     assertEquals(cfgOf(base.copy(topology = Topology.ravigneaux)).topology, Topology.ravigneaux)
@@ -119,6 +120,33 @@ class UiLogicSpec extends FunSuite:
   test("buildConfig passes ring wall, clearance and phased pinions through"):
     val c = cfgOf(base.copy(ringWall = 3.0, clearance = 0.8, phasedPinions = true))
     assertEquals((c.ringWall, c.planetClearance, c.phasedPinions), (3.0, 0.8, true))
+
+  test("buildConfig: OD must exceed twice the ring wall (same rule as the CLI)"):
+    assert(buildConfig(base.copy(od = 4.0, ringWall = 2.0), 1).isLeft)
+    assert(buildConfig(base.copy(od = 4.5, ringWall = 2.0), 1).isRight)
+
+  test("buildConfig: the sun range is ignored when both suns are absent"):
+    val noSuns = Topology.sunlessCdcpCompound
+    assert(buildConfig(base.copy(topology = noSuns, sunMin = 1, sunMax = 1), 1).isRight)
+    assert(buildConfig(base.copy(topology = Topology.nssCompound, sunMin = 1, sunMax = 1), 1).isLeft)
+
+  test("planetCountLabel shows N1/N2 only when they differ"):
+    import cpgc.domain.{CompoundDesign, GearSet, Module, Ratio, Stage, Teeth}
+    def d(n1: Int, n2: Int) = CompoundDesign(
+      Stage(GearSet(Teeth(25), Teeth(11), n1), Module(2.0)), Some(Stage(GearSet(Teeth(26), Teeth(10), n2), Module(2.0))),
+      Topology.ravigneaux, Ratio(5.0), 0.9)
+    assertEquals(planetCountLabel(d(3, 3)), "3")
+    assertEquals(planetCountLabel(d(3, 4)), "3/4")
+
+  test("schematic title uses the preset name for named topologies"):
+    import cpgc.domain.{CompoundDesign, GearSet, Module, Ratio, Stage, Teeth}
+    def d(t: Topology) = CompoundDesign(
+      Stage(GearSet(Teeth(25), Teeth(11), 3), Module(2.0)), Some(Stage(GearSet(Teeth(26), Teeth(10), 3), Module(2.0))),
+      t, Ratio(5.0), 0.9)
+    assert(Schematic.title(d(Topology.ravigneaux)).contains("Ravigneaux"))
+    assert(Schematic.title(d(Topology.simpson)).contains("Simpson"))
+    assert(Schematic.title(d(Topology.ringToSunCascade)).contains("Ring-to-sun"))
+    assert(Schematic.title(d(Topology.standardCompound)).contains("sun-driven"))
 
   test("U2 typed teeth minimum below 2 is an inline error, never a throw"):
     assert(Try(buildConfig(base.copy(sunMin = 1), 50)).toOption.exists(_.isLeft))
