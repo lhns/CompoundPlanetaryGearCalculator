@@ -59,8 +59,8 @@ class GearboxSceneSpec extends FunSuite:
       for s <- sc.stages do
         val st = s.stage
         val m  = st.module.value
-        assertEquals(s.planets.size, st.set.numPlanets, s"$name stage ${s.index} planets")
-        assertEquals(s.carrier.arms.size, st.set.numPlanets, s"$name stage ${s.index} carrier arms")
+        assertEquals(s.planets.size, st.set.numPlanets, s"$name ${s.carrier.body} planets")
+        assertEquals(s.carrier.arms.size, st.set.numPlanets, s"$name ${s.carrier.body} carrier arms")
         assertEquals(s.carrier.arms, s.planets.map(_.centre), s"$name arms end at the planets")
         assertEqualsDouble(s.carrier.radius, st.centerToCenter, 1e-9)
         s.planets.foreach { p =>
@@ -96,7 +96,7 @@ class GearboxSceneSpec extends FunSuite:
       val stackSlot = SchematicLayout.couplingMarks(d.topology).planets
       for p <- sc.gears.filter(_.kind == Kind.Planet) do
         assertEquals(p.coupling, stackSlot, name)
-        assertEquals(p.tone, stackSlot.fold(if p.stage == 1 then Tone.Planet1 else Tone.Planet2)(s => if s == 1 then Tone.Cpl1 else Tone.Cpl2), name)
+        assertEquals(p.tone, stackSlot.fold(if p.stage == 1 then Tone.Planet1 else Tone.Planet2)(Palette.slotTone), name)
 
   test("Ravigneaux: Ring 2 is free, so it takes the ring-ring coupling colour while fixed Ring 1 stays fixed"):
     val sc = GearboxScene.of(presets.find(_._1 == "ravigneaux").get._2)
@@ -107,21 +107,25 @@ class GearboxSceneSpec extends FunSuite:
   test("only a stacked design shares planet parts between the stages"):
     for (name, d) <- presets do
       val sc = GearboxScene.of(d)
-      val shared = sc.gears.filter(_.kind == Kind.Planet).flatMap(_.stackIndex)
-      if sc.stacked then assertEquals(shared.size, 2 * d.stage1.set.numPlanets, name) else assert(shared.isEmpty, name)
+      assertEquals(sc.stacked, SchematicLayout.couplingMarks(d.topology).planets.isDefined, name)
+      if sc.stacked then assertEquals(sc.stages(0).planets.size, sc.stages(1).planets.size, name)
 
-  test("planet centres equal the schematic's planet positions at any phase"):
+  /** a - b folded into (-π, π]. */
+  private def angleDiff(a: Double, b: Double): Double = math.atan2(math.sin(a - b), math.cos(a - b))
+
+  test("planet k sits at k*360/N on the carrier circle (planet 0 at the top) and follows its carrier"):
     for (name, d) <- presets do
       val a  = Kinematics.at(d, 1.234)
       val sc = GearboxScene.of(d)
-      for s <- sc.stages; p <- s.planets do
-        val (wx, wy) = planetCentreAt(p, carrierAngle(s, a))
-        val (sx, sy) = SchematicLayout.planetPositionAt(p.index, s.stage.set.numPlanets, 0.0, s.stage.centerToCenter, carrierAngle(s, a))
-        assertEqualsDouble(wx, sx, 1e-9, s"$name planet ${p.index}")
-        assertEqualsDouble(wy, sy, 1e-9, s"$name planet ${p.index}")
-        val lay = SchematicLayout.stageLayout(s.stage, 0.0)
-        assertEqualsDouble(p.centre._1 * lay.scale, lay.planets(p.index)._1, 1e-9)
-        assertEqualsDouble(p.centre._2 * lay.scale, lay.planets(p.index)._2, 1e-9)
+      for s <- sc.stages; (p, k) <- s.planets.zipWithIndex do
+        val n = s.planets.size
+        val (x, y) = p.centre
+        assertEqualsDouble(math.hypot(x, y), s.stage.centerToCenter, 1e-9, name)
+        assertEqualsDouble(angleDiff(math.atan2(y, x), 2.0 * math.Pi * k / n - math.Pi / 2.0), 0.0, 1e-9, s"$name planet $k") // y down: clockwise on screen
+        val c = carrierAngle(s, a)
+        val (wx, wy) = planetCentreAt(p, c)
+        assertEqualsDouble(math.hypot(wx, wy), s.stage.centerToCenter, 1e-9, name)
+        assertEqualsDouble(angleDiff(math.atan2(wy, wx), math.atan2(y, x) + c), 0.0, 1e-9, s"$name planet $k turned")
 
   test("the schematic places every gear from the scene: centre and outline scale with the stage"):
     for (name, d) <- presets do
@@ -134,10 +138,6 @@ class GearboxSceneSpec extends FunSuite:
         val path = SchematicLayout.gearPath(g, lay.scale, 110.0)
         assert(path.startsWith("M ") && path.endsWith("Z"), name)
         assertEquals(path.count(_ == 'L') + 1, g.outline.size, s"$name ${g.id}")
-        // the stage's own planet positions agree with the scene's
-        if g.kind == Kind.Planet then
-          assertEqualsDouble(x, lay.planets(g.index)._1, 1e-9)
-          assertEqualsDouble(y, lay.planets(g.index)._2, 1e-9)
 
   test("gear outlines are simple polygons (extrudable) spanning root to tip"):
     def selfIntersections(p: Vector[(Double, Double)]): Int =
@@ -161,20 +161,13 @@ class GearboxSceneSpec extends FunSuite:
         assertEqualsDouble(rs.max, if internal then r.root else r.outer, 1e-6)
         assertEqualsDouble(rs.min, if internal then r.outer else r.root, 1e-6)
 
-  test("the SVG gear path is the outline's points, joined"):
-    for (teeth, m, rot) <- Seq((12, 4.0, 0.0), (47, 2.0, 1.1)) do
-      val pts  = SchematicLayout.externalGearPoints(teeth, m, rot)
-      val path = SchematicLayout.externalGearPath(0, 0, teeth, m, rot)
-      assertEquals(path, SchematicLayout.polygonPath(pts))
-      assertEquals(path.count(_ == 'L') + 1, pts.size)
-
   test("the fixed body never turns; planets turn relative to their carrier"):
     for (name, d) <- presets if d.stage2.isDefined do
       val a  = Kinematics.at(d, 1.234)
       val sc = GearboxScene.of(d)
       assertEqualsDouble(a.of(d.topology.fixed), 0.0, 1e-9, name)
       for s <- sc.stages; p <- s.planets do
-        val spin = if s.index == 1 then a.planet1Spin else a.planet2Spin
+        val spin = if s.carrier.body == Body.C1 then a.planet1Spin else a.planet2Spin
         assertEqualsDouble(angle(p, a), spin - a.of(s.carrier.body), 1e-12)
       for g <- sc.gears; b <- g.body do assertEqualsDouble(angle(g, a), a.of(b), 1e-12)
 
@@ -192,3 +185,4 @@ class GearboxSceneSpec extends FunSuite:
     for t <- Seq(Tone.Sun1, Tone.Ring2, Tone.Carrier) do
       assertEquals(Palette.hex(t, light = false), Palette.hex(t, light = true))
       assert(Palette.css(t).startsWith("#"))
+    assertEquals((Palette.slotTone(1), Palette.slotTone(2)), (Tone.Cpl1, Tone.Cpl2))

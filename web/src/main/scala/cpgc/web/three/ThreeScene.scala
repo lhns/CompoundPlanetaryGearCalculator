@@ -2,7 +2,7 @@ package cpgc.web.three
 
 import cpgc.kinematics.BodyAngles
 import cpgc.web.Palette.Tone
-import cpgc.web.Scene3D
+import cpgc.web.{GearboxScene, Scene3D}
 import cpgc.web.Scene3D.{Bar, Cyl, Extruded, Prim}
 import cpgc.web.three.Three.*
 import scala.collection.mutable
@@ -67,10 +67,11 @@ final class ThreeScene(layout: Scene3D.Layout, color: Tone => Int):
     root.add(g)
     clusterGroups += ((c, g))
 
-  /** Set every rotation from the body angles (schematic convention: clockwise positive, hence the sign). */
+  /** Set every rotation from the body angles. The scene's angles are clockwise on screen (y down); about
+    * the 3D z axis (y up) that is the opposite sense, hence the one sign flip. */
   def pose(a: BodyAngles): Unit =
-    clusterGroups.foreach((c, g) => g.rotation.z = -Scene3D.clusterAngle(c, a))
-    planetGroups.foreach((p, g) => g.rotation.z = -Scene3D.planetAngle(p, a))
+    clusterGroups.foreach((c, g) => g.rotation.z = -GearboxScene.clusterAngle(c.bodies, a))
+    planetGroups.foreach((p, g) => g.rotation.z = -GearboxScene.angle(p.gear, a))
 
   def dispose(): Unit =
     geometries.foreach(_.dispose())

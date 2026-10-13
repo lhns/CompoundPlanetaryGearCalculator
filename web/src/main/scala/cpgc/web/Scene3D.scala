@@ -1,7 +1,6 @@
 package cpgc.web
 
 import cpgc.constraints.{Body, Coupling}
-import cpgc.kinematics.BodyAngles
 import cpgc.render.GearGeometry
 import cpgc.web.GearboxScene.{Gear, Scene}
 import cpgc.web.Palette.Tone
@@ -10,9 +9,10 @@ import cpgc.web.Palette.Tone
   * spans, carrier plates and pins, the stacked planet's hub and the weld solids. Positions, sizes,
   * counts, angles and colours all come from the scene; nothing here recomputes them.
   *
-  * Coordinates are millimetres, x right, y up (the scene's y is flipped), z along the axis with stage 1
-  * at the bottom. A schematic rotation by `a` is a rotation by `-a` about z. Each cluster is a group of
-  * welded bodies turning as one; planets sit in their carrier's cluster. */
+  * Coordinates are millimetres, x right, y up (`toWorld` flips the scene's y, the one place where it
+  * happens), z along the axis with stage 1 at the bottom. A schematic rotation by `a` is a rotation by
+  * `-a` about z (applied in `ThreeScene.pose`). Each cluster is a group of welded bodies turning as one;
+  * planets sit in their carrier's cluster. */
 object Scene3D:
 
   /** Gear face width as a fraction of the larger ring outer diameter. */
@@ -24,6 +24,9 @@ object Scene3D:
   private val PlateClearance = 0.04 // plate-to-gear clearance / face width
   private val ArmFactor      = 0.08 // ring-weld spoke thickness / face width
 
+  /** Scene (y down) to 3D (y up). */
+  private def toWorld(p: (Double, Double)): (Double, Double) = (p._1, -p._2)
+
   /** A solid in its group's local frame; `tone` is the scene's colour key. */
   sealed trait Prim:
     def tone: Tone
@@ -33,7 +36,7 @@ object Scene3D:
   /** A scene gear extruded over z0..z1: solid, or (ring) a disc of `gear.outerRadius` with the outline as a hole. */
   final case class Extruded(gear: Gear, z0: Double, z1: Double) extends Prim:
     def tone: Tone = gear.tone
-    def outline: Vector[(Double, Double)] = gear.outline.map((x, y) => (x, -y))
+    def outline: Vector[(Double, Double)] = gear.outline.map(toWorld)
 
   /** Cylinder about the axis through (x, y); with different radii a cone, e.g. a ring-to-ring sleeve. */
   final case class Cyl(
@@ -46,25 +49,22 @@ object Scene3D:
   ) extends Prim
 
   /** A planet (a stacked one spans both stages); turns about its own axis relative to its carrier.
-    * `gear` is the stage-1 gear of a stacked planet. */
-  final case class PlanetPart(gear: Gear, x: Double, y: Double, carrier: Body, stacked: Boolean, prims: Vector[Prim])
+    * `gear` is the stage-1 gear of a stacked planet, `(x, y)` its centre in the cluster's frame. */
+  final case class PlanetPart(gear: Gear, x: Double, y: Double, stacked: Boolean, prims: Vector[Prim])
 
-  /** Rigidly welded bodies. `angleBody` supplies the rotation. */
+  /** Rigidly welded bodies; they turn as one (`GearboxScene.clusterAngle`). */
   final case class Cluster(
-      bodies: Vector[Body], angleBody: Body, prims: Vector[Prim], connectors: Vector[Prim], planets: Vector[PlanetPart]
+      bodies: Vector[Body], prims: Vector[Prim], connectors: Vector[Prim], planets: Vector[PlanetPart]
   )
 
   final case class Layout(
       faceWidth: Double,
-      stageGap: Double,
-      stage1Z: Double,
-      stage2Z: Option[Double],
+      stage2Z: Option[Double], // stage 1 starts at z = 0
       zMin: Double,
       zMax: Double,
       outerRadius: Double,
       clusters: Vector[Cluster]
-  ):
-    def allPrims: Vector[Prim] = clusters.flatMap(c => c.prims ++ c.connectors ++ c.planets.flatMap(_.prims))
+  )
 
   def build(scene: Scene): Layout =
     val t        = scene.design.topology
@@ -89,7 +89,6 @@ object Scene3D:
     // Carrier plates sit outside the stack: below stage 1 and above stage 2.
     def plateZ(i: Int): (Double, Double) =
       if i == 1 then (-clr - plateT, -clr) else (z2 + w + clr, z2 + w + clr + plateT)
-    def slotTone(slot: Int): Tone = if slot == 1 then Tone.Cpl1 else Tone.Cpl2
 
     // Where a weld meets each body, along z.
     def attachZ(b: Body): Double = b match
@@ -109,7 +108,7 @@ object Scene3D:
         case Body.C1 | Body.C2 =>
           val c        = s.carrier
           val (p0, p1) = plateZ(i)
-          val arms     = c.arms.map((x, y) => (x, -y))
+          val arms     = c.arms.map(toWorld)
           val armW     = 3.0 * pinR(i)
           // a stacked planet's pin runs the full height, so stage 2's carrier only adds its plate
           val pinSpan =
@@ -120,15 +119,17 @@ object Scene3D:
             arms.map((x, y) => Bar(0, 0, x, y, armW, p0, p1, c.tone)) ++
             pinSpan.toVector.flatMap((a, e) => arms.map((x, y) => Cyl(x, y, pinR(i), pinR(i), a, e, false, c.tone)))
 
-    def planetParts(carrier: Body, i: Int): Vector[PlanetPart] =
+    def planetParts(i: Int): Vector[PlanetPart] =
       sc(i).planets.map { g =>
-        PlanetPart(g, g.centre._1, -g.centre._2, carrier, stacked = false, Vector(Extruded(g, zOf(i - 1), zOf(i - 1) + w)))
+        val (x, y) = toWorld(g.centre)
+        PlanetPart(g, x, y, stacked = false, Vector(Extruded(g, zOf(i - 1), zOf(i - 1) + w)))
       }
 
-    def stackedParts(carrier: Body): Vector[PlanetPart] =
+    def stackedParts: Vector[PlanetPart] =
       sc(1).planets.zip(sc(2).planets).map { case (g1, g2) =>
-        val hubR = 0.5 * math.min(planetRoot(g1), planetRoot(g2))
-        PlanetPart(g1, g1.centre._1, -g1.centre._2, carrier, stacked = true,
+        val hubR   = 0.5 * math.min(planetRoot(g1), planetRoot(g2))
+        val (x, y) = toWorld(g1.centre)
+        PlanetPart(g1, x, y, stacked = true,
           Vector(Extruded(g1, z1, z1 + w), Cyl(0, 0, hubR, hubR, z1 + w, z2, false, g1.tone), Extruded(g2, z2, z2 + w)))
       }
 
@@ -161,23 +162,16 @@ object Scene3D:
     val connectors: Vector[(Body, Vector[Prim])] =
       scene.couplings.flatMap((slot, c) => Coupling.bodyPair(c).map(slot -> _))
         .filter { case (_, (a, b)) => t.presentBodies.contains(a) && t.presentBodies.contains(b) }
-        .map { case (slot, (a, b)) => a -> connector(a, b, slotTone(slot)) }
+        .map { case (slot, (a, b)) => a -> connector(a, b, Palette.slotTone(slot)) }
 
     val clusters = scene.clusters.map { group =>
       val planets = group.flatMap {
-        case b @ Body.C1             => if stacked then stackedParts(b) else planetParts(b, 1)
-        case b @ Body.C2 if !stacked => planetParts(b, 2)
-        case _                       => Vector.empty
+        case Body.C1             => if stacked then stackedParts else planetParts(1)
+        case Body.C2 if !stacked => planetParts(2)
+        case _                   => Vector.empty
       }
-      Cluster(group, group.head, group.flatMap(bodyPrims),
+      Cluster(group, group.flatMap(bodyPrims),
         connectors.collect { case (a, ps) if group.contains(a) => ps }.flatten, planets)
     }
 
-    Layout(w, gap, z1, Option.when(twoStage)(z2), plateZ(1)._1, if twoStage then plateZ(2)._2 else z1 + w,
-      outerR, clusters)
-
-  /** Rotation about z of a cluster, in the schematic's clockwise-positive convention. */
-  def clusterAngle(c: Cluster, a: BodyAngles): Double = a.of(c.angleBody)
-
-  /** Rotation of a planet relative to its carrier. */
-  def planetAngle(p: PlanetPart, a: BodyAngles): Double = GearboxScene.angle(p.gear, a)
+    Layout(w, Option.when(twoStage)(z2), plateZ(1)._1, if twoStage then plateZ(2)._2 else z1 + w, outerR, clusters)

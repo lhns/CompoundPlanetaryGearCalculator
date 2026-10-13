@@ -5,7 +5,8 @@ import cpgc.domain.Stage
 import cpgc.render.GearGeometry
 import cpgc.render.GearGeometry.{gearRadii as coreGearRadii}
 
-// Pure schematic geometry (positions, radii, angles, badge anchors, tooth outlines); no DOM, no Laminar.
+// Pure schematic geometry (stage scale and spacing, radii, badge anchors, couplings) plus the one tooth-outline
+// builder shared with the 3D view; no DOM, no Laminar.
 object SchematicLayout:
 
   /** Outer radius of every stage's ring in viewBox units; each stage is scaled to it. */
@@ -15,29 +16,20 @@ object SchematicLayout:
   def stageCenters(twoStage: Boolean): (Double, Double) =
     if twoStage then (-110.0, 110.0) else (0.0, 0.0)
 
-  /** Drawn geometry of one stage, centred at (`cx`, 0). */
+  /** Drawn geometry of one stage, centred at (`cx`, 0). `scale` (drawing units per mm) is the one
+    * mm to drawing conversion; every other length here is already in drawing units. */
   final case class StageLayout(
       cx: Double,
       scale: Double,
       mPx: Double,
-      sunPitchR: Double,
-      planetPitchR: Double,
-      ringPitchR: Double,
       ringOR: Double,
       sunOR: Double,
       carrierR: Double,
-      planets: Vector[(Double, Double)],
       ringBadge: (Double, Double),
       sunBadge: (Double, Double),
       carrierBadge: (Double, Double),
       labelY: Double
   )
-
-  /** Position of planet `i` of `n` on a carrier of radius `carrierR` about (`cx`, 0):
-    * planet 0 at the top, then k·360/N clockwise on screen. */
-  def planetPosition(i: Int, n: Int, cx: Double, carrierR: Double): (Double, Double) =
-    val theta = 2.0 * math.Pi * i / n - math.Pi / 2.0
-    (cx + carrierR * math.cos(theta), carrierR * math.sin(theta))
 
   def stageLayout(stage: Stage, cx: Double): StageLayout =
     val rawOuterR    = stage.ringOuterDiameter / 2.0
@@ -45,27 +37,18 @@ object SchematicLayout:
     val px           = (x: Double) => x * scale
     val mPx          = px(stage.module.value)
     val sunPitchR    = mPx * stage.set.sun.toDouble / 2.0
-    val planetPitchR = mPx * stage.set.planet.toDouble / 2.0
-    val ringPitchR   = mPx * stage.set.ring.toDouble / 2.0
     // Ring's outer rim flush with the polygon's back-of-tooth (dedendum).
     val ringOR    = coreGearRadii(stage.set.ring.toInt, mPx, internal = true).root
     val carrierR  = px(stage.centerToCenter)
-    val n         = stage.set.numPlanets
     StageLayout(
       cx = cx, scale = scale, mPx = mPx,
-      sunPitchR = sunPitchR, planetPitchR = planetPitchR, ringPitchR = ringPitchR,
       ringOR = ringOR, sunOR = coreGearRadii(stage.set.sun.toInt, mPx, internal = false).outer,
       carrierR = carrierR,
-      planets = Vector.tabulate(n)(planetPosition(_, n, cx, carrierR)),
       ringBadge = (cx, -ringOR - 4),
       sunBadge = (cx, -sunPitchR - mPx * 1.6),
       carrierBadge = (cx, carrierR + 9),
       labelY = ringOR + 16
     )
-
-  /** Phasing turns → drawn angle: planet i sits at 2πi/N − π/2, so the phasing frame
-    * (planet k at k/N turns) is rotated by a quarter turn; mesh conditions are invariant under that shift. */
-  def toRad(turns: Double): Double = 2.0 * math.Pi * (turns - 0.25)
 
   def rotateXform(angleRad: Double, ox: Double, oy: Double): String =
     val deg = angleRad * 180.0 / math.Pi
@@ -124,11 +107,6 @@ object SchematicLayout:
       Connector(from, ((from._1 + to._1) / 2.0, (from._2 + to._2) / 2.0 + bow), to)
     }
 
-  /** Centre of planet `i` of `n` after the carrier has turned by `carrierRad`. */
-  def planetPositionAt(i: Int, n: Int, cx: Double, carrierR: Double, carrierRad: Double): (Double, Double) =
-    val theta = 2.0 * math.Pi * i / n - math.Pi / 2.0 + carrierRad
-    (cx + carrierR * math.cos(theta), carrierR * math.sin(theta))
-
   // ── Involute tooth geometry ────────────────────────────────────────────────
   //
   // Two involute gears at the correct centre distance mesh tangentially along
@@ -144,8 +122,9 @@ object SchematicLayout:
 
   private inline def inv(t: Double): Double = GearGeometry.inv(t)
 
-  // The one implementation of the tooth outlines: closed, simple polygons (first point not repeated)
-  // about the origin in y-down convention. The scene stores them; the SVG paths are just their text.
+  // The one implementation of the tooth outlines: closed, simple polygons (first point not repeated),
+  // counter-clockwise per tooth, about the origin in y-down convention. The scene stores them (in mm); the
+  // SVG paths are just their text and the 3D view extrudes them.
 
   /** SVG path data of a closed polygon. */
   def polygonPath(pts: Vector[(Double, Double)]): String =
@@ -156,26 +135,20 @@ object SchematicLayout:
     sb ++= "Z"
     sb.toString
 
-  /** Centre of a scene gear in the drawing: scene mm scaled by `k`, about a stage axis at x = `cx`. */
-  def gearCentre(g: GearboxScene.Gear, k: Double, cx: Double): (Double, Double) =
-    (cx + k * g.centre._1, k * g.centre._2)
+  /** A scene point (mm, about the stage axis) in the drawing: scaled by `k`, about the axis at x = `cx`. */
+  def place(p: (Double, Double), k: Double, cx: Double): (Double, Double) = (cx + k * p._1, k * p._2)
+
+  /** Centre of a scene gear in the drawing. */
+  def gearCentre(g: GearboxScene.Gear, k: Double, cx: Double): (Double, Double) = place(g.centre, k, cx)
 
   /** SVG path of a scene gear's outline in the drawing. */
   def gearPath(g: GearboxScene.Gear, k: Double, cx: Double): String =
     val (ox, oy) = gearCentre(g, k, cx)
     polygonPath(g.outline.map((x, y) => (ox + k * x, oy + k * y)))
 
-  /** SVG path data of an external involute gear (sun, planet) centred at (`cx`, `cy`). */
-  def externalGearPath(cx: Double, cy: Double, teeth: Int, modulePx: Double, rotateRad: Double): String =
-    polygonPath(externalGearPoints(teeth, modulePx, rotateRad).map((x, y) => (cx + x, cy + y)))
-
-  /** SVG path data of an internal involute ring gear (teeth point inward) centred at (`cx`, `cy`). */
-  def internalGearPath(cx: Double, cy: Double, teeth: Int, modulePx: Double, rotateRad: Double): String =
-    polygonPath(internalGearPoints(teeth, modulePx, rotateRad).map((x, y) => (cx + x, cy + y)))
-
-  /** Outline of an external involute gear (sun, planet) about the origin. */
-  def externalGearPoints(teeth: Int, modulePx: Double, rotateRad: Double): Vector[(Double, Double)] =
-    val r          = coreGearRadii(teeth, modulePx, internal = false)
+  /** Outline of an external involute gear (sun, planet) about the origin, in the unit of `module`. */
+  def externalGearPoints(teeth: Int, module: Double, rotateRad: Double): Vector[(Double, Double)] =
+    val r          = coreGearRadii(teeth, module, internal = false)
     val toothPitch = 2.0 * math.Pi / teeth
     val deltaBase  = math.Pi / (2.0 * teeth) + inv(PressureAngleRad)
     def alphaAt(rr: Double): Double = if rr <= r.base then 0.0 else math.acos(r.base / rr)
@@ -188,9 +161,7 @@ object SchematicLayout:
     var k = 0
     while k < teeth do
       val thetaC = k * toothPitch + rotateRad
-      // Counter-clockwise per tooth: left flank up, tip, right flank down, then the trough to the next
-      // tooth. (`externalGearPath` visits the same vertices in a different order, which crosses itself
-      // and only fills correctly under SVG's non-zero rule; an extrusion needs a simple polygon.)
+      // Per tooth: left flank up, tip, right flank down, then the trough to the next tooth.
       if r.root < r.base then addPolar(r.root, thetaC - deltaBase)
       var s = 0
       while s < FlankSamples do
@@ -220,8 +191,8 @@ object SchematicLayout:
     out.result()
 
   /** Outline of an internal involute ring gear's tooth side (teeth point inward) about the origin. */
-  def internalGearPoints(teeth: Int, modulePx: Double, rotateRad: Double): Vector[(Double, Double)] =
-    val r          = coreGearRadii(teeth, modulePx, internal = true)
+  def internalGearPoints(teeth: Int, module: Double, rotateRad: Double): Vector[(Double, Double)] =
+    val r          = coreGearRadii(teeth, module, internal = true)
     val toothPitch = 2.0 * math.Pi / teeth
     val deltaPitch = math.Pi / (2.0 * teeth)
     val invP       = inv(PressureAngleRad)

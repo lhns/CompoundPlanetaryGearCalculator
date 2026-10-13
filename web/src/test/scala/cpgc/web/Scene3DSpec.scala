@@ -23,15 +23,14 @@ class Scene3DSpec extends FunSuite:
 
   private val eps = 1e-6
 
-  private def extruded(l: Layout) = l.allPrims.collect { case e: Extruded => e }
+  private def allPrims(l: Layout): Vector[Prim] = l.clusters.flatMap(c => c.prims ++ c.connectors ++ c.planets.flatMap(_.prims))
+  private def extruded(l: Layout) = allPrims(l).collect { case e: Extruded => e }
 
   test("stage 2 sits above stage 1 with a gap; gears of each stage stay in their band"):
     val l = lay(design(Topology.ravigneaux))
-    assertEquals(l.stage1Z, 0.0)
     val z2 = l.stage2Z.get
-    assertEqualsDouble(z2, l.faceWidth + l.stageGap, eps)
-    assert(l.stageGap > 0.0)
-    for e <- extruded(l) if e.gear.kind != Kind.Planet || !e.gear.stackIndex.isDefined do
+    assertEqualsDouble(z2, l.faceWidth * (1.0 + Scene3D.StageGapFactor), eps)
+    for e <- extruded(l) do
       if e.gear.stage == 1 then assert(e.z0 >= -eps && e.z1 <= l.faceWidth + eps, e.gear.id)
       else assert(e.z0 >= z2 - eps && e.z1 <= z2 + l.faceWidth + eps, e.gear.id)
     assert(l.zMin < 0.0 && l.zMax > z2 + l.faceWidth)
@@ -117,10 +116,10 @@ class Scene3DSpec extends FunSuite:
       assertEquals(built.map(_.id).sorted, sc.gears.map(_.id).sorted, name)
       for g <- built do assertEquals(g, sc.gears.find(_.id == g.id).get, s"$name ${g.id}") // the very same scene data
       for c <- l.clusters; p <- c.planets do
-        // a planet group sits at the scene centre (y mirrored) and turns as the scene says
+        // a planet group sits at the scene centre, y mirrored (scene y is down, 3D y is up)
         assertEquals((p.x, p.y), (p.gear.centre._1, -p.gear.centre._2), name)
-        assertEqualsDouble(planetAngle(p, a), GearboxScene.angle(p.gear, a), 0.0)
-      for c <- l.clusters do assertEqualsDouble(clusterAngle(c, a), a.of(c.angleBody), 0.0)
+      for c <- l.clusters; b <- c.bodies do // welded bodies turn as one
+        assertEqualsDouble(GearboxScene.clusterAngle(c.bodies, a), a.of(b), 1e-9, s"$name $b")
       assertEquals(l.clusters.flatMap(_.bodies).toSet, d.topology.presentBodies, name)
 
   // ── orbit maths ──────────────────────────────────────────────────────────
