@@ -1,8 +1,9 @@
 package cpgc.verify
 
-import cpgc.constraints.{Body, BodyRole, Topology}
+import cpgc.Calculator
+import cpgc.constraints.{Body, BodyRole, SearchConfig, TeethBounds, Topology}
 import cpgc.domain.{GearSet, Teeth}
-import cpgc.search.Compounder
+import cpgc.search.{Compounder, Enumerator, RoleSolver, Scorer}
 import cpgc.verify.AssemblyOracle.{B, Pinion, Stage, Weld}
 import munit.FunSuite
 
@@ -109,6 +110,36 @@ class AssemblyConditionSpec extends FunSuite:
         val (s1, s2) = variant.apply(a, b)
         assertEquals(productionRule(variant, s1, s2, n, phased = true),
           AssemblyOracle.stacked(Seq(s1, s2), n, Pinion.Individual), s"$s1 / $s2 N=$n")
+    }
+
+  // Engine output (PairSearch + Evaluator, the production path) vs the exact oracle, on small ranges.
+  for variant <- Variants; phased <- Seq(false, true) do
+    test(s"engine output == oracle-assemblable pairs, stacked $variant, phasedPinions = $phased") {
+      val cfg = SearchConfig(
+        topology = topologyOf(variant), sunTeeth = TeethBounds(6, 11), planetTeeth = TeethBounds(6, 9),
+        ringTeeth = TeethBounds(18, 30), planets = TeethBounds(2, 4), minModule = 0.0,
+        planetClearance = 0.0, sunPlanetFactor = 10.0, phasedPinions = phased)
+      def oracleStage(st: cpgc.domain.Stage, sunPresent: Boolean) =
+        Stage(Option.when(sunPresent)(st.set.sun.toInt), st.set.planet.toInt, st.set.ring.toInt)
+      def oracle(s1: Stage, s2: Stage, n: Int) =
+        AssemblyOracle.stacked(Seq(s1, s2), n, if phased then Pinion.Individual else Pinion.Identical(g0))
+      val found = Calculator.search(cfg).toVector
+      assert(found.nonEmpty)
+      for d <- found do
+        val (a, b) = (d.stage1.set, d.stage2.get.set)
+        assertEquals(a.numPlanets, b.numPlanets)
+        assert(oracle(oracleStage(d.stage1, variant.sun1), oracleStage(d.stage2.get, variant.sun2), a.numPlanets),
+          s"engine accepted an unassemblable design: $a / $b")
+      // and nothing assemblable that the enumerator offers is missing
+      val keys = found.map(d => Scorer.dedupKey(d.stage1.set, d.stage2.get.set)).toSet
+      for
+        a <- Enumerator.stage1Sets(cfg); b <- Enumerator.stage2Sets(cfg)
+        if a.numPlanets == b.numPlanets && RoleSolver.ratio(cfg.topology, a, Some(b)).isDefined // solvable (not degenerate)
+      do
+        val ok = oracle(
+          Stage(Option.when(variant.sun1)(a.sun.toInt), a.planet.toInt, a.ring.toInt),
+          Stage(Option.when(variant.sun2)(b.sun.toInt), b.planet.toInt, b.ring.toInt), a.numPlanets)
+        assertEquals(keys.contains(Scorer.dedupKey(a, b)), ok, s"$a / $b")
     }
 
   test("minimal counterexample: Tp1 = Tp2 = 10, Ts 20 / 21, N = 2") {

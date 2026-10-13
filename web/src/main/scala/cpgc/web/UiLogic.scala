@@ -250,46 +250,32 @@ object UiLogic:
   def bounds(lo: Int, hi: Int): TeethBounds =
     TeethBounds(math.min(lo, hi), math.max(lo, hi))
 
-  private def boundsChecked(name: String, lo: Int, hi: Int): Either[String, TeethBounds] =
-    val l = math.min(lo, hi)
-    if l < 2 then Left(s"$name must be at least 2") else Right(TeethBounds(l, math.max(lo, hi)))
-
-  /** Validate the form and build the search configuration. Never throws. */
+  /** Validate the form and build the search configuration (`SearchConfig.validate`, shared with the
+    * CLI). Inverted ranges are swapped; a blank max planet/sun ratio means the `SearchConfig` default.
+    * Never throws. */
   def buildConfig(f: FormValues, topPerTarget: Int): Either[String, SearchConfig] =
-    def positive(name: String, v: Double): Either[String, Double] =
-      if v.isFinite && v > 0 then Right(v) else Left(s"$name must be a number greater than 0")
-    def nonNeg(name: String, v: Double): Either[String, Double] =
-      if v.isFinite && v >= 0 then Right(v) else Left(s"$name must be a number, 0 or more")
+    def sorted(lo: Int, hi: Int) = (math.min(lo, hi), math.max(lo, hi))
     val factor: Either[String, Double] =
-      if f.sunPlanetFactor.trim.isEmpty then Right(1e9)
+      if f.sunPlanetFactor.trim.isEmpty then Right(SearchConfig.DefaultSunPlanetFactor)
       else parseFinite(f.sunPlanetFactor).filter(_ > 0)
         .toRight("Max planet/sun ratio must be a number greater than 0 (or blank)")
-    for
-      sun     <- boundsChecked("Sun teeth", f.sunMin, f.sunMax)
-      planet  <- boundsChecked("Planet teeth", f.planetMin, f.planetMax)
-      ring    <- boundsChecked("Ring teeth", f.ringMin, f.ringMax)
-      planets <- boundsChecked("# planets", f.planetsMin, f.planetsMax)
-      od      <- positive("First-stage OD", f.od)
-      mm      <- nonNeg("Min module", f.minModule)
-      wall    <- nonNeg("Ring wall", f.ringWall)
-      clr     <- nonNeg("Planet clearance", f.clearance)
-      _       <- Either.cond(od > 2 * wall, (), "First-stage OD must be larger than twice the ring wall")
-      spf     <- factor
-    yield SearchConfig(
-      topology        = f.topology,
-      sunTeeth        = sun,
-      planetTeeth     = planet,
-      ringTeeth       = ring,
-      planets         = planets,
-      firstStageOD    = od,
-      minModule       = mm,
-      sunPlanetFactor = spf,
-      topPerTarget    = topPerTarget,
-      targets         = parseTargets(f.target),
-      ringWall        = wall,
-      planetClearance = clr,
-      phasedPinions   = f.phasedPinions
-    )
+    factor.flatMap { spf =>
+      SearchConfig.validate(SearchConfig.Input(
+        topology        = f.topology,
+        sun             = sorted(f.sunMin, f.sunMax),
+        planet          = sorted(f.planetMin, f.planetMax),
+        ring            = sorted(f.ringMin, f.ringMax),
+        planets         = sorted(f.planetsMin, f.planetsMax),
+        firstStageOD    = f.od,
+        minModule       = f.minModule,
+        ringWall        = f.ringWall,
+        planetClearance = f.clearance,
+        sunPlanetFactor = spf,
+        targets         = parseTargets(f.target).map(_.value),
+        topPerTarget    = topPerTarget,
+        phasedPinions   = f.phasedPinions
+      )).left.map(_.mkString("; "))
+    }
 
   // ── Search bookkeeping ─────────────────────────────────────────────────────
 
@@ -312,6 +298,13 @@ object UiLogic:
     case SortBy.Ratio      => "Smallest absolute reduction ratio first. Pick this to browse from low to high reduction."
     case SortBy.Efficiency => "Most mechanically efficient designs first. Pick this to minimise transmission losses."
     case SortBy.Simplicity => "Fewest total teeth first. Pick this to favour compact, printable, cheaper designs."
+
+  /** Planet count for display: "3", or "3/4" when the two stages differ (N1/N2). */
+  def planetCountLabel(d: cpgc.domain.CompoundDesign): String =
+    val n1 = d.stage1.set.numPlanets
+    d.stage2.map(_.set.numPlanets) match
+      case Some(n2) if n2 != n1 => s"$n1/$n2"
+      case _                    => n1.toString
 
   /** Efficiency as a percentage: the one unit used in the table and schematic. */
   def fmtEfficiency(e: Double): String = f"${e * 100}%.1f%%"

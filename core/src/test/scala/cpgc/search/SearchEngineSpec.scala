@@ -183,3 +183,22 @@ class SearchEngineSpec extends FunSuite:
       val got = Calculator.top(cfg, sort, 1_000_000)
       assertEquals(got, Scorer.sort(all, sort, cfg.targets))
     }
+
+  // -- deterministic ties: one secondary key in TopK and Scorer.sort ------------------------
+
+  for t <- topologies; sort <- SortBy.values; targets <- Seq(Seq(53.12), Seq.empty[Double]) do
+    test(s"ties rank by the secondary key, by $sort with ${targets.size} targets [${t.legacyMode.fold("sun-less CDCP")(_.toString)}]") {
+      val cfg = cfgFor(t, targets)
+      def primary(d: CompoundDesign): Double = sort match
+        case SortBy.BestFit    => if targets.isEmpty then math.abs(d.ratio.value) else Scorer.bestTargetError(cfg.targets, d.ratio)
+        case SortBy.Ratio      => math.abs(d.ratio.value)
+        case SortBy.Efficiency => -d.efficiency
+        case SortBy.Simplicity => Scorer.toothCount(d).toDouble
+      val second = Scorer.tieBreak(sort, cfg.targets)
+      def keys(ds: Seq[CompoundDesign]) = ds.map(d => (primary(d), second(d)))
+      val got = Calculator.top(cfg, sort, 40)
+      assertEquals(keys(got), keys(got).sorted)
+      // ranking does not depend on the enumeration order (ties are resolved by the key, not arrival)
+      val all = Calculator.search(cfg).toVector
+      assertEquals(keys(got), keys(Scorer.sort(all.reverse, sort, cfg.targets).take(40)))
+    }
