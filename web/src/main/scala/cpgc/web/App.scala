@@ -2,8 +2,8 @@ package cpgc.web
 
 import com.raquo.laminar.api.L.*
 import cpgc.Calculator
-import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
-import cpgc.domain.{CompoundDesign, Mode, ProfileShift, Ratio, Validity}
+import cpgc.constraints.{Body, BodyRole, Coupling, SearchConfig, Topology}
+import cpgc.domain.{CompoundDesign, ProfileShift, Validity}
 import cpgc.`export`.{Csv, Json, OpenScad}
 import cpgc.search.Scorer
 import cpgc.search.Scorer.SortBy
@@ -13,15 +13,13 @@ import scala.scalajs.js
 /** UX-level state of the schematic preview. Drives which placeholder text is
   * shown when there is no `selectedDesign` to render.
   *
-  *  - `Searching` — a `runSearch` invocation is in flight; show a transient
-  *    "Searching designs…" placeholder.
-  *  - `NoResults` — the most recent search completed and returned 0 designs;
-  *    show the actionable "no design matches" message.
-  *  - `HasResults` — the most recent search produced ≥ 1 design; the schematic
-  *    renders that design, so this state never produces a placeholder.
+  *  - `Searching` — a search is in flight; show a transient placeholder.
+  *  - `NoResults` — the most recent search completed and returned 0 designs.
+  *  - `HasResults` — the most recent search produced ≥ 1 design.
+  *  - `Invalid` — the form does not describe a search; the reason is shown inline.
   */
 enum SearchState:
-  case Searching, NoResults, HasResults
+  case Searching, NoResults, HasResults, Invalid
 
 /** Severity of a transient toast notification. */
 enum ToastLevel:
@@ -31,19 +29,9 @@ enum ToastLevel:
   * rendering and dismissal. */
 final case class Toast(id: Long, message: String, level: ToastLevel)
 
-/** Named gearbox families. Each maps to a complete `Topology` (stages, couplings,
-  * roles); the UI picker shows these instead of the raw coupling math for the
-  * common case. `Custom` is the catch-all for topologies that don't match any
-  * named family. */
-enum GearboxPreset:
-  case SingleStage
-  case SunDriven       // Standard compound: stacked planet, sun in, R2 out
-  case CarrierDriven   // CDCP: stacked planet, carrier in, R2 out
-  case NoSecondSun     // NSS: stacked planet, no S2
-  case RingToSunCascade
-  case Ravigneaux
-  case Simpson
-  case Custom
+/** What the last finished search produced. `designs` is the complete result
+  * set when `rerankable` (so a sort change needs no new search). */
+final case class FinishedRun(cfg: SearchConfig, designs: Vector[CompoundDesign], rerankable: Boolean)
 
 object App:
 
@@ -51,12 +39,15 @@ object App:
     * name (the symbol `title` is the `<title>` element). Bind it explicitly. */
   private val titleAttr: HtmlAttr[String] =
     htmlAttr("title", com.raquo.laminar.codecs.StringAsIsCodec)
+  private val ariaExpanded: HtmlAttr[String] = htmlAttr("aria-expanded", com.raquo.laminar.codecs.StringAsIsCodec)
+  private val ariaPressed: HtmlAttr[String]  = htmlAttr("aria-pressed", com.raquo.laminar.codecs.StringAsIsCodec)
+  private val ariaLabel: HtmlAttr[String]    = htmlAttr("aria-label", com.raquo.laminar.codecs.StringAsIsCodec)
+  private val ariaInvalid: HtmlAttr[String]  = htmlAttr("aria-invalid", com.raquo.laminar.codecs.StringAsIsCodec)
+  private val roleAttr: HtmlAttr[String]     = htmlAttr("role", com.raquo.laminar.codecs.StringAsIsCodec)
 
   // ── Toast notifications ────────────────────────────────────────────────────
-  // A dependency-free transient-message stack. The app is a single-instance
-  // SPA, so a module-level `Var` is the simplest home. `notify` is the
-  // last-resort surface for anything that would otherwise die silently in the
-  // browser console.
+  // A dependency-free transient-message stack for anything that would otherwise
+  // die silently in the browser console.
 
   private val toasts: Var[Vector[Toast]] = Var(Vector.empty)
   private var toastIdSeq: Long = 0L
@@ -71,74 +62,53 @@ object App:
   private def dismissToast(id: Long): Unit =
     toasts.update(_.filterNot(_.id == id))
 
-  /** Set a `Var` from a value whose construction may throw an
-    * `IllegalArgumentException` (a `Topology` invariant). On failure the `Var`
-    * is left untouched — never poisoned — and the reason is surfaced as a
-    * toast. This is the structural guard against the `VarError: Unable to
-    * update a failed Var` cascade. */
-  private def safeSet[A](v: Var[A], next: => A): Unit =
-    try v.set(next)
-    catch
-      case e: IllegalArgumentException =>
-        notify(s"Invalid configuration: ${e.getMessage}", ToastLevel.Error)
+  private var idSeq = 0
+  private def freshId(prefix: String): String =
+    idSeq += 1
+    s"$prefix-$idSeq"
 
   // ── Gearbox-type presets ──────────────────────────────────────────────────
-  // The constraints panel offers a "Gearbox type" picker as its primary
-  // topology control. Each preset is a complete `Topology` (stages, couplings,
-  // roles). For topologies that don't match any named preset, the picker
-  // shows `Custom` and the Advanced section is the way to edit them.
-
-  private def presetTopology(p: GearboxPreset): Topology = UiLogic.presetTopology(p)
-
-  private def topologyPreset(t: Topology): GearboxPreset = UiLogic.topologyPreset(t)
 
   /** Short user-facing label for the picker. */
   private def presetLabel(p: GearboxPreset): String = p match
     case GearboxPreset.SingleStage       => "Single-stage planetary"
     case GearboxPreset.SunDriven         => "Sun-driven compound (Standard)"
     case GearboxPreset.CarrierDriven     => "Carrier-driven compound (CDCP)"
+    case GearboxPreset.SunlessCdcp       => "CDCP (sun-less)"
     case GearboxPreset.NoSecondSun       => "No-second-sun compound (NSS)"
     case GearboxPreset.RingToSunCascade  => "Ring-to-sun cascade"
     case GearboxPreset.Ravigneaux        => "Ravigneaux"
     case GearboxPreset.Simpson           => "Simpson"
-    case GearboxPreset.Custom            => "Custom…"
+    case GearboxPreset.Custom            => "Custom (edited below)"
 
   /** One-line plain-English description shown under the picker. */
   private def presetDescription(p: GearboxPreset): String = p match
     case GearboxPreset.SingleStage       => "One planetary stage. Sun in, carrier out, ring grounded."
     case GearboxPreset.SunDriven         => "Classic stacked-planet compound. Sun in, ring-2 out."
     case GearboxPreset.CarrierDriven     => "Same compound, carrier as input. Smoother low-ratio reductions."
+    case GearboxPreset.SunlessCdcp       => "Carrier in, no sun gears at all: the planets mesh only with the two rings."
     case GearboxPreset.NoSecondSun       => "Stage-2 has no sun (one fewer mesh → higher efficiency)."
     case GearboxPreset.RingToSunCascade  => "Stage-1 ring drives stage-2 sun. Series-like compound."
     case GearboxPreset.Ravigneaux        => "Stage-1 carrier drives stage-2 sun; rings welded. Automotive AT."
     case GearboxPreset.Simpson           => "Stage-1 carrier drives stage-2 ring; suns welded. Automotive AT."
-    case GearboxPreset.Custom            => "Custom topology — adjust couplings & roles below."
+    case GearboxPreset.Custom            => "Custom topology: adjust the suns, couplings and roles below."
 
-  /** Safety ceiling on result-set size — never binds for sensible tooth-count
-    * bounds (typical search produces O(100)–O(1000) designs); prevents
-    * pathological-bounds searches from freezing the tab. See ADR-0010.
-    */
-  private val ComputeCap = 10_000
+  /** Largest result set the engine keeps. A run that found no more than this
+    * has the complete set and can be re-ranked without searching again (ADR 0010). */
+  private val TopK = 16_000
 
-  /** How long a single search chunk runs before yielding the JS thread.
-    * Tuned a touch under one 60 fps frame so the browser has slack to paint
-    * and process events while a heavy search is in flight — especially
-    * useful in Firefox, whose JS engine processes our linear-algebra
-    * `LinAlg.solve` hot loop slower than V8 does. */
+  /** Search units run between clock checks inside a chunk. */
+  private val StepUnits = 256
+
+  /** How long a single search chunk runs before yielding the JS thread. */
   private val ChunkBudgetMs = 12
 
-  /** Hard wall-clock cap on a single search. After this, chunking stops and
-    * whatever has been collected is reported as a truncated result set. Keeps
-    * pathological searches (very wide tooth-count ranges) from triggering
-    * the browser's "Page Unresponsive" dialog. */
+  /** Hard wall-clock cap on a single search. After this the engine is stopped
+    * and its best-so-far is reported as truncated. */
   private val MaxSearchMs = 5_000
 
-  /** Minimum time the schematic stays in the `Searching` state, even if the
-    * search itself finishes sooner. Without this, default-config searches
-    * complete in ~50 ms and the progress bar flashes too briefly to register
-    * visually. 500 ms is comfortably under the perceptual "slow" threshold
-    * while long enough that the bar + count are legible.
-    */
+  /** Minimum time the schematic stays in the `Searching` state, so the
+    * progress bar does not flash on fast searches. */
   private val MinSearchingMs = 500
 
   def main(args: Array[String]): Unit =
@@ -146,8 +116,6 @@ object App:
       val container = dom.document.getElementById("app")
       render(container, root())
     }(unsafeWindowOwner)
-
-  private def parseDouble(s: String): Option[Double] = UiLogic.parseDouble(s)
 
   private def query: String = dom.window.location.search
 
@@ -157,134 +125,146 @@ object App:
   private val RingRange    = (10, 200)
   private val PlanetsRange = (2, 8)
 
+  /** Mirror the page state into the address bar so the URL round-trips. */
+  private def writeUrl(f: FormValues, sort: SortBy): Unit =
+    try
+      val extra = if query.contains("pause") then "&pause" else ""
+      dom.window.history.replaceState(null, "", "?" + UiLogic.toQuery(f, sort) + extra)
+    catch case _: Throwable => () // e.g. sandboxed file:// pages
+
   private def root(): HtmlElement =
     val animator = Animator()
     animator.start()
-    if query.contains("pause") then animator.running.set(false)
-    // Test-only: force a no-results state for screenshot verification.
-    val forceNoResults = query.contains("nodesigns")
+    if urlHas("pause") then animator.running.set(false)
     val form0         = UiLogic.initialForm(query)
     val topologyVar   = Var[Topology](form0.topology)
-    // URL-driven initial values (see `UiLogic.initialForm`).
     val sunMin        = Var(form0.sunMin)
     val sunMax        = Var(form0.sunMax)
     val planetMin     = Var(form0.planetMin)
     val planetMax     = Var(form0.planetMax)
-    val ringMin       = Var(if forceNoResults then 200 else form0.ringMin)
-    val ringMax       = Var(if forceNoResults then 200 else form0.ringMax)
+    val ringMin       = Var(form0.ringMin)
+    val ringMax       = Var(form0.ringMax)
     val planetsMin    = Var(form0.planetsMin)
     val planetsMax    = Var(form0.planetsMax)
     val odVar         = Var(form0.od)
     val minModule     = Var(form0.minModule)
     val sunPlanetFact = Var(form0.sunPlanetFactor)
     val targetVar     = Var(form0.target)
+    val phasedVar     = Var(form0.phasedPinions)
+    val ringWallVar   = Var(form0.ringWall)
+    val clearanceVar  = Var(form0.clearance)
     val displayCount  = Var(10)
-    val sortByVar     = Var[SortBy](SortBy.BestFit)
+    val sortByVar     = Var[SortBy](UiLogic.initialSort(query))
 
     val resultsVar     = Var(Vector.empty[CompoundDesign])
     val selectedVar    = Var(Option.empty[CompoundDesign])
     val statusVar      = Var("")
+    val errorVar       = Var(Option.empty[String])
     val searchState    = Var[SearchState](SearchState.Searching)
-    // Live count of designs accumulated by the in-flight search. Updated at
-    // the end of every chunk; reset to 0 when a new search begins. Drives the
-    // `Searching designs… (N found)` placeholder + the in-flight status line.
     val searchProgress = Var(0)
-    // Elapsed-wall-clock fraction in [0, 1] of MaxSearchMs. Drives the
-    // schematic's in-flight progress bar fill width. Reaches 1.0 when the
-    // wall-clock cap triggers.
     val searchProgressFraction = Var(0.0)
-    // Open-state for the "Advanced gear constraints" disclosure (min module +
-    // max planet/sun ratio — technical knobs most users never touch).
     val advancedConstraintsOpen: Var[Boolean] = Var(false)
-
-    // Normalise an inverted (lo > hi) pair before passing it to TeethBounds, so
-    // the user can drag/type freely without tripping the `max >= min` invariant.
-    // Cancellation token for the chunked search. Each `runSearch` call bumps
-    // the epoch; in-flight chunks that captured an older epoch exit on their
-    // next iteration, freeing the JS thread for the new search.
+    var lastRun = Option.empty[FinishedRun]
+    // Cancellation token: each search bumps the epoch; in-flight chunks of an
+    // older search exit on their next iteration.
     var searchEpoch = 0L
+
+    def formNow(): FormValues = FormValues(
+      topology = topologyVar.now(),
+      sunMin = sunMin.now(), sunMax = sunMax.now(),
+      planetMin = planetMin.now(), planetMax = planetMax.now(),
+      ringMin = ringMin.now(), ringMax = ringMax.now(),
+      planetsMin = planetsMin.now(), planetsMax = planetsMax.now(),
+      od = odVar.now(), minModule = minModule.now(),
+      sunPlanetFactor = sunPlanetFact.now(), target = targetVar.now(),
+      phasedPinions = phasedVar.now(), ringWall = ringWallVar.now(), clearance = clearanceVar.now()
+    )
+
+    def clearResults(): Unit =
+      lastRun = None
+      resultsVar.set(Vector.empty)
+      selectedVar.set(None)
 
     def runSearch(): Unit =
       searchEpoch += 1
       val epoch = searchEpoch
-      searchState.set(SearchState.Searching)
+      val form  = formNow()
+      writeUrl(form, sortByVar.now())
+      clearResults()
+      statusVar.set("")
       searchProgress.set(0)
       searchProgressFraction.set(0.0)
-      // Clear the previous design so the schematic shows the searching
-      // placeholder rather than a stale design rendered under a freshly-
-      // changed topology (which would be a design/topology desync).
-      selectedVar.set(None)
-      val t0 = js.Date.now()
-      val cfg = UiLogic.buildConfig(
-        FormValues(
-          topology = topologyVar.now(),
-          sunMin = sunMin.now(), sunMax = sunMax.now(),
-          planetMin = planetMin.now(), planetMax = planetMax.now(),
-          ringMin = ringMin.now(), ringMax = ringMax.now(),
-          planetsMin = planetsMin.now(), planetsMax = planetsMax.now(),
-          od = odVar.now(), minModule = minModule.now(),
-          sunPlanetFactor = sunPlanetFact.now(), target = targetVar.now()
-        ),
-        topPerTarget = ComputeCap
-      )
+      UiLogic.buildConfig(form, TopK) match
+        case Left(msg) =>
+          errorVar.set(Some(msg))
+          searchState.set(SearchState.Invalid)
+        case Right(cfg) =>
+          errorVar.set(None)
+          searchState.set(SearchState.Searching)
+          try startSearch(epoch, cfg)
+          catch
+            case e: Throwable =>
+              errorVar.set(Some(s"Search failed: ${e.getMessage}"))
+              searchState.set(SearchState.Invalid)
 
-      // The phased state machine lives in `Calculator.searchSteps`. Each
-      // `steps.next()` does one unit of work; this loop is purely scheduling.
-      val acc   = scala.collection.mutable.ArrayBuffer.empty[CompoundDesign]
-      val steps = Calculator.searchSteps(cfg)
+    def startSearch(epoch: Long, cfg: SearchConfig): Unit =
+      val t0     = js.Date.now()
+      val sortBy = sortByVar.now()
+      val engine = Calculator.engine(cfg, sortBy, TopK)
 
       def chunk(): Unit =
         if epoch != searchEpoch then return
         val deadline = js.Date.now() + ChunkBudgetMs
+        var done     = engine.done
         try
-          while steps.hasNext && acc.size < ComputeCap && js.Date.now() < deadline do
-            steps.next().foreach(acc.+=)
+          while !done && js.Date.now() < deadline do done = engine.step(StepUnits)
         catch
           case e: Throwable =>
-            // The search core is meant to be total; if anything still throws,
-            // surface it as a toast instead of dying silently in the console.
-            notify(s"Search failed: ${e.getMessage}", ToastLevel.Error)
-            searchState.set(SearchState.NoResults)
+            errorVar.set(Some(s"Search failed: ${e.getMessage}"))
+            searchState.set(SearchState.Invalid)
             return
-        searchProgress.set(acc.size)
+        searchProgress.set(engine.found.toInt)
         val totalElapsed = js.Date.now() - t0
         searchProgressFraction.set(math.min(1.0, totalElapsed / MaxSearchMs.toDouble))
-        val done    = !steps.hasNext
-        val capped  = acc.size >= ComputeCap
         val expired = totalElapsed >= MaxSearchMs
-        if !done && !capped && !expired then
-          js.timers.setTimeout(0)(chunk())
+        if !done && !expired then js.timers.setTimeout(0)(chunk())
         else
-          val truncated = !done && expired
-          def finalize(): Unit =
-            if epoch != searchEpoch then ()
-            else
-              val designs = Scorer.sort(acc.toVector, sortByVar.now(), cfg.targets).take(ComputeCap)
-              val elapsed = js.Date.now() - t0
+          if !done then engine.stop()
+          def finish(): Unit =
+            if epoch == searchEpoch then
+              val designs   = engine.top
+              val elapsed   = (js.Date.now() - t0).toInt
+              val rerank    = UiLogic.rerankable(engine.done, engine.truncated, engine.found, TopK)
+              lastRun = Some(FinishedRun(cfg, designs, rerank))
               resultsVar.set(designs)
               selectedVar.set(designs.headOption)
-              displayCount.set(10)
               statusVar.set(
-                if truncated then
-                  s"${elapsed.toInt} ms (truncated after $MaxSearchMs ms — narrow your ranges)"
-                else
-                  s"${elapsed.toInt} ms"
+                if engine.truncated then s"$elapsed ms · best so far — truncated, narrow your ranges"
+                else if engine.found > TopK then s"$elapsed ms · top $TopK of ${engine.found}"
+                else s"$elapsed ms"
               )
-              searchState.set(
-                if designs.nonEmpty then SearchState.HasResults else SearchState.NoResults
-              )
-          // Hold the bar visible for at least MinSearchingMs so the user
-          // actually sees it on fast searches. During the hold, pin the fill
-          // to 100% (the shimmer keeps animating via CSS).
+              searchState.set(if designs.nonEmpty then SearchState.HasResults else SearchState.NoResults)
           val holdMs = MinSearchingMs - totalElapsed
-          if holdMs <= 0 then finalize()
+          if holdMs <= 0 then finish()
           else
             searchProgressFraction.set(1.0)
-            js.timers.setTimeout(holdMs)(finalize())
+            js.timers.setTimeout(holdMs)(finish())
 
-      // Defer the first chunk so the "Searching designs…" placeholder paints
-      // before we start consuming the iterator.
+      // Defer the first chunk so the placeholder paints first.
       js.timers.setTimeout(0)(chunk())
+
+    /** Sort-pill click: re-rank the finished set in place when it is
+      * complete, otherwise search again with the new ranking. */
+    def chooseSort(by: SortBy): Unit =
+      if by != sortByVar.now() then
+        sortByVar.set(by)
+        lastRun match
+          case Some(run) if run.rerankable =>
+            writeUrl(formNow(), by)
+            val ranked = Scorer.sort(run.designs, by, run.cfg.targets)
+            resultsVar.set(ranked)
+            selectedVar.update(sel => sel.filter(ranked.contains).orElse(ranked.headOption))
+          case _ => runSearch()
 
     js.timers.setTimeout(50)(runSearch())
 
@@ -297,11 +277,13 @@ object App:
       planetsMin.signal, planetsMax.signal,
       odVar.signal, minModule.signal,
       sunPlanetFact.signal, targetVar.signal,
-      sortByVar.signal
+      phasedVar.signal, ringWallVar.signal, clearanceVar.signal
     ).map(_.changes.map(_ => ()))
     EventStream.merge(inputStreams*)
       .debounce(200)
       .foreach(_ => runSearch())(unsafeWindowOwner)
+
+    val hasTargets: Signal[Boolean] = targetVar.signal.map(t => UiLogic.parseTargets(t).nonEmpty)
 
     div(
       cls := "app",
@@ -315,6 +297,7 @@ object App:
               span(cls := "toast-msg", t.message),
               button(
                 cls := "toast-dismiss",
+                ariaLabel := "Dismiss",
                 "✕",
                 onClick.preventDefault --> { _ => dismissToast(t.id) }
               )
@@ -324,68 +307,69 @@ object App:
       ),
       div(cls := "top-grid",
         // ── Left: form ─────────────────────────────────────────────────────
-        // Task-flow order: pick the gearbox type, say what reduction you
-        // want, set the gear-tooth search space, set the physical size, with
-        // technical knobs hidden behind disclosures.
         div(cls := "panel form-panel",
           h2("Constraints"),
-          topologyControls(topologyVar),
+          topologyControls(topologyVar, phasedVar),
           labeled("Target ratio(s)",
-            tooltip = "Reduction ratios you want, comma-separated (e.g. 100, 53.12). Leave blank to enumerate all designs in the search space.",
-            placeholderText = Some("e.g. 53.12 or blank for all")
-          )(strInput(targetVar)),
+            tooltip = "Reduction ratios you want. Separate several with ';' or a space (e.g. 100; 53.12). " +
+              "A comma between digits is a decimal comma (53,12 = 53.12). Leave blank to list all designs."
+          ) { id =>
+            input(idAttr := id, typ := "text", placeholder := "e.g. 53.12 or blank for all",
+              controlled(value <-- targetVar.signal, onInput.mapToValue --> targetVar))
+          },
+          div(cls := "field-hint",
+            child.text <-- targetVar.signal.map(t => UiLogic.targetHint(t).getOrElse(""))),
           rangeRow("Sun teeth",    sunMin,     sunMax,     SunRange,
-            tooltip = "Range of sun-gear tooth counts to search."),
+            tooltip = "Range of sun-gear tooth counts to search (not used by a sun-less stage)."),
           rangeRow("Planet teeth", planetMin,  planetMax,  PlanetRange,
             tooltip = "Range of planet-gear tooth counts to search."),
           rangeRow("Ring teeth",   ringMin,    ringMax,    RingRange,
-            tooltip = "Range of ring-gear tooth counts to search (derived as r = s + 2p)."),
+            tooltip = "Range of ring-gear tooth counts to search."),
           rangeRow("# planets",    planetsMin, planetsMax, PlanetsRange,
             tooltip = "Number of planet gears arranged around the sun. More planets = smoother load sharing; 3–4 is most common."),
           labeled("First-stage OD (mm)",
-            tooltip = "Approximate outer diameter of stage 1's ring gear, in millimetres. Sets the overall scale of the gearbox.")(numInput(odVar)),
+            tooltip = "Outer diameter of stage 1's ring gear in millimetres, wall included. Sets the overall scale of the gearbox.")(
+            id => numInput(odVar, id)),
           // ── Advanced gear constraints ──────────────────────────────────
-          div(cls := "advanced-section",
-            div(cls := "advanced-summary",
-              onClick.preventDefault --> { _ => advancedConstraintsOpen.update(!_) },
-              span(cls := "advanced-arrow",
-                child.text <-- advancedConstraintsOpen.signal.map(if _ then "▾" else "▸")),
-              " Advanced gear constraints"
-            ),
-            div(cls := "advanced-content",
-              cls("hidden") <-- advancedConstraintsOpen.signal.map(!_),
-              labeled("Min module (mm/tooth)",
-                tooltip = "Smallest acceptable gear-tooth size. 'Module' is mm of pitch diameter per tooth — a manufacturability floor.")(numInput(minModule)),
-              labeled("Max planet/sun ratio",
-                tooltip = "Reject designs where the planet has more teeth than this multiple of the sun's teeth. Limits how oversized planets can be relative to the sun.")(
-                input(
-                  typ := "text", inputMode := "decimal",
-                  placeholder := "unlimited",
-                  controlled(value <-- sunPlanetFact.signal, onInput.mapToValue --> sunPlanetFact)
-                )
-              )
-            )
-          )
+          disclosure("Advanced gear constraints", advancedConstraintsOpen, emptyMod,
+            labeled("Min module (mm/tooth)",
+              tooltip = "Smallest acceptable gear-tooth size. 'Module' is mm of pitch diameter per tooth — a manufacturability floor.")(
+              id => numInput(minModule, id)),
+            labeled("Max planet/sun ratio",
+              tooltip = "Reject designs where the planet has more teeth than this multiple of the sun's teeth. Blank means unlimited.")(
+              id => input(idAttr := id, typ := "text", inputMode := "decimal", placeholder := "unlimited",
+                controlled(value <-- sunPlanetFact.signal, onInput.mapToValue --> sunPlanetFact))),
+            labeled("Ring wall (mm)",
+              tooltip = "Material between the ring's tooth roots and its outside diameter. The OD bounds the ring's outside.")(
+              id => numInput(ringWallVar, id)),
+            labeled("Planet clearance (modules)",
+              tooltip = "Minimum gap between the tips of adjacent planets, in modules.")(
+              id => numInput(clearanceVar, id))
+          ),
+          div(cls := "form-error", roleAttr := "alert",
+            child.text <-- errorVar.signal.map(_.getOrElse("")))
         ),
         // ── Right: schematic ─────────────────────────────────────────
         div(cls := "panel schematic-panel",
           div(cls := "panel-header",
             span(cls := "panel-title", "Schematic"),
             div(cls := "controls",
-              label(cls := "speed-label", "speed"),
+              label(cls := "speed-label", forId := "speed-input", "speed"),
               input(
+                idAttr := "speed-input",
                 cls := "speed",
                 typ := "range",
                 minAttr := "0", maxAttr := "3", stepAttr := "0.05",
                 controlled(
                   value <-- animator.speed.signal.map(_.toString),
-                  onInput.mapToValue.map(s => parseDouble(s).getOrElse(animator.speed.now())) --> animator.speed
+                  onInput.mapToValue.map(s => UiLogic.parseFinite(s).getOrElse(animator.speed.now())) --> animator.speed
                 )
               ),
               span(cls := "rpm-readout",
                 child.text <-- animator.speed.signal.map(s => f"${s * 60}%.0f rpm (input)")),
               button(
                 cls := "iconbtn",
+                ariaLabel := "Pause or resume the animation",
                 child.text <-- animator.running.signal.map(if _ then "⏸" else "▶"),
                 onClick.preventDefault --> { _ => animator.running.update(!_) }
               )
@@ -397,22 +381,16 @@ object App:
               case None    => ""
             }
           ),
-          div(cls := "schematic", Schematic(selectedVar.signal, animator.phase, topologyVar.signal, searchState.signal, searchProgress.signal, searchProgressFraction.signal))
+          div(cls := "schematic", Schematic(selectedVar.signal, animator.phase, searchState.signal, searchProgress.signal, searchProgressFraction.signal))
         )
       ),
       // ── Bottom: results table + export bar ──────────────────────────
       div(cls := "panel results-panel",
         div(cls := "panel-header",
           span(cls := "panel-title", "Results"),
-          div(cls := "sort-pills",
-            sortPill(sortByVar, SortBy.BestFit,    "Best fit",
-              "Closest match to your target ratio. Pick this when you typed a target."),
-            sortPill(sortByVar, SortBy.Ratio,      "Ratio",
-              "Smallest reduction ratio first. Pick this to browse from low to high reduction."),
-            sortPill(sortByVar, SortBy.Efficiency, "Efficiency",
-              "Most mechanically efficient designs first. Pick this to minimise transmission losses."),
-            sortPill(sortByVar, SortBy.Simplicity, "Simplicity",
-              "Fewest total teeth first. Pick this to favour compact, printable, cheaper designs.")
+          div(cls := "sort-pills", roleAttr := "group", ariaLabel := "Sort results by",
+            List(SortBy.BestFit, SortBy.Ratio, SortBy.Efficiency, SortBy.Simplicity).map(by =>
+              sortPill(sortByVar, by, hasTargets, chooseSort))
           ),
           div(cls := "exports",
             exportButton("CSV",  "text/csv", "csv",
@@ -424,21 +402,22 @@ object App:
         ),
         resultsTable(resultsVar.signal, selectedVar, displayCount.signal),
         div(cls := "show-more-row",
-          span(cls := "panel-sub",
+          span(cls := "panel-sub", roleAttr := "status",
             child.text <-- resultsVar.signal
               .combineWith(displayCount.signal, statusVar.signal, searchState.signal, searchProgress.signal)
               .map { (ds, n, status, state, progress) =>
-                if state == SearchState.Searching then
-                  s"Searching… $progress found"
-                else
-                  val shown = math.min(n, ds.size)
-                  val countText = s"Showing $shown of ${ds.size}"
-                  if status.isEmpty then countText else s"$countText  ·  $status"
+                state match
+                  case SearchState.Searching => s"Searching… $progress found"
+                  case SearchState.Invalid   => "Fix the input error to search."
+                  case _ =>
+                    val shown = math.min(n, ds.size)
+                    val countText = s"Showing $shown of ${ds.size}"
+                    if status.isEmpty then countText else s"$countText  ·  $status"
               }
           ),
           div(cls := "show-more-right",
-            label(cls := "rows-label", "Rows"),
-            select(cls := "rows-select",
+            label(cls := "rows-label", forId := "rows-select", "Rows"),
+            select(cls := "rows-select", idAttr := "rows-select",
               onChange.mapToValue --> Observer[String] { v =>
                 if v == "all" then displayCount.set(resultsVar.now().size.max(1))
                 else v.toIntOption.foreach(n => displayCount.set(n.max(1)))
@@ -457,6 +436,9 @@ object App:
         )
       )
     )
+
+  private def urlHas(name: String): Boolean =
+    query.stripPrefix("?").split('&').exists(p => p == name || p.startsWith(name + "="))
 
   // ── Export helpers ─────────────────────────────────────────────────────────
 
@@ -487,6 +469,8 @@ object App:
       }
     )
 
+  /** Save `content` as a file. The anchor is attached to the document for the
+    * click (Firefox), and the object URL is revoked after the download started. */
   private def download(filename: String, mime: String, content: String): Unit =
     val options = js.Dynamic.literal(`type` = mime).asInstanceOf[dom.BlobPropertyBag]
     val parts   = js.Array[dom.BlobPart](content)
@@ -495,14 +479,19 @@ object App:
     val a       = dom.document.createElement("a").asInstanceOf[dom.html.Anchor]
     a.href = url
     a.setAttribute("download", filename)
+    a.style.display = "none"
+    dom.document.body.appendChild(a)
     a.click()
-    dom.URL.revokeObjectURL(url)
+    js.timers.setTimeout(1000) {
+      dom.document.body.removeChild(a)
+      dom.URL.revokeObjectURL(url)
+    }
 
   // ── Detail / table ─────────────────────────────────────────────────────────
 
   private def detailLine(d: CompoundDesign): String =
     val s1 = d.stage1
-    val base = s"Ratio ${fmtRatio(d.ratio.value)}:1   η ${fmt3(d.efficiency)}   N=${s1.set.numPlanets}"
+    val base = s"Ratio ${fmtRatio(d.ratio.value)}:1   η ${UiLogic.fmtEfficiency(d.efficiency)}   N=${s1.set.numPlanets}"
     val mods = d.stage2 match
       case Some(b) => s"   m₁=${fmt3(s1.module.value)} m₂=${fmt3(b.module.value)}"
       case None    => s"   m=${fmt3(s1.module.value)}"
@@ -519,10 +508,8 @@ object App:
     val rounded = math.round(d * 1000).toDouble / 1000.0
     rounded.toString
 
-  /** Display a ratio with explicit sign. Positive ratios print as-is; negative
-    * ratios (output rotates opposite to input — common with novel couplings)
-    * print with a leading "−" + arrow glyph so the user can't mistake a sign
-    * flip for a magnitude. */
+  /** Display a ratio with explicit sign. Negative ratios (output rotates
+    * opposite to input) print with a leading "−" and an arrow glyph. */
   private def fmtRatio(r: Double): String =
     val mag = fmt3(math.abs(r))
     if r < 0 then s"−$mag ↺" else mag
@@ -540,21 +527,23 @@ object App:
           th(titleAttr := "Estimated mechanical efficiency, from the count and types of meshes.", "eff"),
           th(titleAttr := "Number of planets in stage 1.", "N"),
           th(titleAttr := "Even-spacing check: whether all N planets fit symmetrically.", "spacing"),
-          th(titleAttr := "Stage 1 sun gear tooth count.", "S₁"),
+          th(titleAttr := "Stage 1 sun gear tooth count (— when stage 1 has no sun).", "S₁"),
           th(titleAttr := "Stage 1 planet gear tooth count.", "P₁"),
           th(titleAttr := "Stage 1 ring gear tooth count.", "R₁"),
           th(titleAttr := "Stage 1 module (mm per tooth).", "m₁"),
-          th(titleAttr := "Stage 2 sun gear tooth count (only meaningful when stage 2 has its own sun).", "S₂"),
-          th(titleAttr := "Stage 2 planet gear tooth count (coupled to the stage-1 planet shaft).", "P₂"),
-          th(titleAttr := "Stage 2 ring gear tooth count (the output ring).", "R₂"),
+          th(titleAttr := "Stage 2 sun gear tooth count (— when stage 2 has no sun).", "S₂"),
+          th(titleAttr := "Stage 2 planet gear tooth count.", "P₂"),
+          th(titleAttr := "Stage 2 ring gear tooth count.", "R₂"),
           th(titleAttr := "Stage 2 module (mm per tooth).", "m₂")
         )),
         tbody(children <-- designs.combineWith(displayCount).map { (ds, n) =>
           ds.take(n).map { d =>
             tr(
               cls := "row",
+              tabIndex := 0,
               cls("sel") <-- selected.signal.map(_.contains(d)),
               onClick --> { _ => selected.set(Some(d)) },
+              onKeyDown.filter(e => e.key == "Enter" || e.key == " ").preventDefault --> { _ => selected.set(Some(d)) },
               td(cls := "col-warn",
                 d.validity match
                   case Validity.Warning(reason) =>
@@ -562,296 +551,268 @@ object App:
                   case Validity.Ok => span()
               ),
               td(cls := "num", fmtRatio(d.ratio.value)),
-              td(cls := "num", fmt3(d.efficiency)),
+              td(cls := "num", UiLogic.fmtEfficiency(d.efficiency)),
               td(d.stage1.set.numPlanets.toString),
               td(if d.spacingOk then "ok" else "—"),
               td(if d.topology.s1Present then d.stage1.set.sun.toInt.toString else "—"),
               td(d.stage1.set.planet.toInt.toString),
               td(d.stage1.set.ring.toInt.toString),
               td(cls := "num", fmt3(d.stage1.module.value)),
-              td(d.stage2.fold("-") { s =>
-                if !d.topology.s2Present then "—" else s.set.sun.toInt.toString
-              }),
-              td(d.stage2.fold("-")(_.set.planet.toInt.toString)),
-              td(d.stage2.fold("-")(_.set.ring.toInt.toString)),
-              td(cls := "num", d.stage2.fold("-")(s => fmt3(s.module.value)))
+              td(d.stage2.fold("—") { s => if d.topology.s2Present then s.set.sun.toInt.toString else "—" }),
+              td(d.stage2.fold("—")(_.set.planet.toInt.toString)),
+              td(d.stage2.fold("—")(_.set.ring.toInt.toString)),
+              td(cls := "num", d.stage2.fold("—")(s => fmt3(s.module.value)))
             )
           }
         })
       )
     )
 
-  // ── Inputs ─────────────────────────────────────────────────────────────────
+  // ── Disclosure ─────────────────────────────────────────────────────────────
 
-  // ── Topology role-picker UI (D4) ───────────────────────────────────────────
-  //
-  // Three native <select>s — Input / Output / Fixed — over the bodies present
-  // in the current topology, plus a Stages segmented control and an S2-presence
-  // toggle. Choosing a body in any picker swaps roles with whoever previously
-  // held that role, preserving the "exactly one Input, one Output, one Fixed"
-  // invariant. The remaining bodies are Free.
+  /** A collapsible section: a `<button aria-expanded>` header over its content. */
+  private def disclosure(
+      title: String, open: Var[Boolean], suffix: Modifier[HtmlElement], content: Modifier[HtmlElement]*
+  ): HtmlElement =
+    val contentId = freshId("disc")
+    div(cls := "advanced-section",
+      button(
+        cls := "advanced-summary", typ := "button",
+        ariaExpanded <-- open.signal.map(_.toString),
+        aria.controls := contentId,
+        onClick.preventDefault --> { _ => open.update(!_) },
+        span(cls := "advanced-arrow", child.text <-- open.signal.map(if _ then "▾" else "▸")),
+        s" $title",
+        suffix
+      ),
+      div(idAttr := contentId, cls := "advanced-content",
+        cls("hidden") <-- open.signal.map(!_),
+        content
+      )
+    )
 
-  private def topologyControls(v: Var[Topology]): HtmlElement =
+  // ── Topology controls ──────────────────────────────────────────────────────
+
+  /** A `<select>` whose DOM value is forced back to `current()` after each
+    * change, so a rejected edit never leaves the wrong option displayed. */
+  private def pickSelect(current: () => String)(handle: String => Unit)(mods: Modifier[HtmlElement]*): HtmlElement =
+    select(
+      mods,
+      inContext { (el: HtmlElement) =>
+        onChange --> Observer[dom.Event] { _ =>
+          val sel = el.ref.asInstanceOf[dom.html.Select]
+          handle(sel.value)
+          sel.value = current()
+        }
+      }
+    )
+
+  private def topologyControls(v: Var[Topology], phased: Var[Boolean]): HtmlElement =
     val stagesSig    = v.signal.map(_.stages)
     val compoundSig  = v.signal.map(t => !UiLogic.couplingSelectorsDisabled(t))
     val inputBody    = v.signal.map(_.input)
     val outputBody   = v.signal.map(_.output)
     val fixedBody    = v.signal.map(_.fixed)
-    val s2PresentSig = v.signal.map(_.s2Present)
-    val presetSig    = v.signal.map(topologyPreset)
-    // Auto-open the Advanced section whenever the topology is `Custom` (no
-    // preset match). The user can also toggle manually.
+    val presetSig    = v.signal.map(UiLogic.topologyPreset)
+    val stackedSig   = v.signal.map(_.stacked)
     val advancedOpen: Var[Boolean] = Var(false)
-    presetSig.foreach { p =>
-      if p == GearboxPreset.Custom then advancedOpen.set(true)
-    }(unsafeWindowOwner)
+    // A derived-Custom topology opens the section so the edits are visible.
+    presetSig.foreach { p => if p == GearboxPreset.Custom then advancedOpen.set(true) }(unsafeWindowOwner)
+
+    def sunToggle(stage: Int, text: String): HtmlElement =
+      val present = v.signal.map(t => t.roles.get(if stage == 1 then Body.S1 else Body.S2).exists(_ != BodyRole.Absent))
+      val reason  = v.signal.map(UiLogic.sunToggleDisabledReason(_, stage))
+      div(
+        label(cls := "topology-toggle",
+          cls("disabled") <-- reason.map(_.isDefined),
+          titleAttr <-- reason.map(_.getOrElse("")),
+          input(typ := "checkbox",
+            disabled <-- reason.map(_.isDefined),
+            controlled(
+              checked <-- present,
+              onInput.mapToChecked --> Observer[Boolean] { b =>
+                UiLogic.setSunPresent(v.now(), stage, b) match
+                  case Right(t)  => v.set(t)
+                  case Left(msg) => notify(s"Cannot change the sun: $msg", ToastLevel.Warn)
+              }
+            )
+          ),
+          span(cls := "switch"),
+          span(text)
+        ),
+        div(cls := "field-hint", child.text <-- reason.map(_.fold("")(r => s"Locked: $r")))
+      )
+
+    def couplingPicker(slot: CouplingSlot, name: String, tip: String, pick: Topology => Coupling): Modifier[HtmlElement] =
+      val sid = freshId("coupling")
+      Seq(
+        label(cls := "stage-coupling-row", forId := sid, cls("disabled") <-- compoundSig.map(!_), name),
+        pickSelect(() => pick(v.now()).toString)(n => v.update(t => UiLogic.setCoupling(t, slot, Coupling.valueOf(n))))(
+          idAttr := sid, cls := "role-select",
+          disabled <-- compoundSig.map(!_),
+          titleAttr := tip,
+          Coupling.values.toSeq.map { c =>
+            option(
+              value := c.toString,
+              selected <-- v.signal.map(pick(_) == c),
+              disabled <-- v.signal.map(UiLogic.couplingOptionDisabled(_, slot, c)),
+              titleAttr <-- v.signal.map(UiLogic.couplingOptionReason(_, slot, c).getOrElse("")),
+              Coupling.label(c)
+            )
+          }
+        )
+      )
+
+    def rolePicker(name: String, currentSig: Signal[Body], current: Topology => Body, role: BodyRole, tip: String): Modifier[HtmlElement] =
+      val rid = freshId("role")
+      Seq(
+        label(forId := rid, name),
+        pickSelect(() => current(v.now()).toString)(n => v.update(UiLogic.assignRole(_, Body.valueOf(n), role)))(
+          idAttr := rid, cls := "role-select", titleAttr := tip,
+          // Bodies that do not exist in this topology (absent suns, stage 2 of a single stage) are greyed out.
+          Body.values.toSeq.map { b =>
+            option(
+              value := b.toString,
+              selected <-- currentSig.map(_ == b),
+              disabled <-- v.signal.map(t => !t.roles.contains(b) || t.roles.get(b).contains(BodyRole.Absent)),
+              Body.label(b)
+            )
+          }
+        )
+      )
 
     div(cls := "topology",
       // ── Gearbox-type preset picker — the primary topology control ─────────
-      label("Gearbox type"),
-      select(cls := "preset-select",
+      label(forId := "preset-select", "Gearbox type"),
+      pickSelect(() => UiLogic.topologyPreset(v.now()).toString) { name =>
+        val p = GearboxPreset.valueOf(name)
+        if p != GearboxPreset.Custom then v.set(UiLogic.presetTopology(p))
+      }(
+        idAttr := "preset-select", cls := "preset-select",
         titleAttr := "Pick a named gearbox family. Most users don't need to touch the Advanced section.",
-        onChange.mapToValue --> Observer[String] { name =>
-          val p = GearboxPreset.valueOf(name)
-          // Custom is a sentinel — selecting it doesn't change the topology;
-          // the user adjusts things in the Advanced section to drift off-preset.
-          if p != GearboxPreset.Custom then
-            safeSet(v, presetTopology(p))
+        UiLogic.selectablePresets.map { p =>
+          option(value := p.toString, selected <-- presetSig.map(_ == p), presetLabel(p))
         },
-        GearboxPreset.values.toSeq.map { p =>
-          option(
-            value := p.toString,
-            selected <-- presetSig.map(_ == p),
-            presetLabel(p)
-          )
-        }
+        // Shown only as the derived state of an edited topology; not a choice.
+        option(value := GearboxPreset.Custom.toString, disabled := true, hidden <-- presetSig.map(_ != GearboxPreset.Custom),
+               selected <-- presetSig.map(_ == GearboxPreset.Custom), presetLabel(GearboxPreset.Custom))
       ),
-      // Plain-English description of the chosen preset.
-      div(cls := "topology-derived",
-        child.text <-- presetSig.map(presetDescription)
-      ),
-      // ── Advanced section — couplings, roles, S2 toggle ────────────────────
-      div(cls := "advanced-section",
-        div(cls := "advanced-summary",
-          onClick.preventDefault --> { _ => advancedOpen.update(!_) },
-          span(cls := "advanced-arrow",
-            child.text <-- advancedOpen.signal.map(if _ then "▾" else "▸")),
-          " Advanced topology",
-          span(cls := "advanced-customized",
-            child.text <-- presetSig.map(p =>
-              if p == GearboxPreset.Custom then "  (customized)" else ""
-            )
+      div(cls := "topology-derived", child.text <-- presetSig.map(presetDescription)),
+      // ── Advanced section — suns, couplings, roles ─────────────────────────
+      disclosure("Advanced topology", advancedOpen,
+        span(cls := "advanced-customized",
+          child.text <-- presetSig.map(p => if p == GearboxPreset.Custom then "  (customized)" else "")),
+        label("Stages"),
+        div(cls := "topology-segment", roleAttr := "group", ariaLabel := "Number of stages",
+          button(
+            typ := "button",
+            cls("active") <-- stagesSig.map(_ == 1),
+            ariaPressed <-- stagesSig.map(s => (s == 1).toString),
+            titleAttr := "One planetary stage: sun + planets + ring + carrier.",
+            "Single stage",
+            onClick.preventDefault --> { _ => v.update(UiLogic.setStageCount(_, 1)) }
+          ),
+          button(
+            typ := "button",
+            cls("active") <-- stagesSig.map(_ == 2),
+            ariaPressed <-- stagesSig.map(s => (s == 2).toString),
+            titleAttr := "Two planetary stages; compound reduction.",
+            "Compound (2 stages)",
+            onClick.preventDefault --> { _ => v.update(UiLogic.setStageCount(_, 2)) }
           )
         ),
-        div(cls := "advanced-content",
-          cls("hidden") <-- advancedOpen.signal.map(!_),
-          label("Stages"),
-          div(cls := "topology-segment",
-            button(
-              cls("active") <-- stagesSig.map(_ == 1),
-              titleAttr := "One planetary stage: sun + planets + ring + carrier.",
-              "Single stage",
-              onClick.preventDefault --> { _ => safeSet(v, UiLogic.setStageCount(v.now(), 1)) }
-            ),
-            button(
-              cls("active") <-- stagesSig.map(_ == 2),
-              titleAttr := "Two planetary stages sharing a carrier; compound reduction.",
-              "Compound (2 stages)",
-              onClick.preventDefault --> { _ => safeSet(v, UiLogic.setStageCount(v.now(), 2)) }
-            )
-          ),
-          label(cls := "stage-coupling-row",
-            cls("disabled") <-- compoundSig.map(!_),
-            "Coupling 1"
-          ),
-          select(cls := "role-select",
-            disabled <-- compoundSig.map(!_),
-            titleAttr := "First inter-stage weld. The classic compound uses Carrier 1 ↔ Carrier 2.",
-            onChange.mapToValue --> Observer[String] { name =>
-              safeSet(v, UiLogic.setCoupling(v.now(), CouplingSlot.First, Coupling.valueOf(name)))
-            },
-            Coupling.values.toSeq.map { c =>
-              option(
-                value := c.toString,
-                selected <-- v.signal.map(_.firstCoupling == c),
-                // Disable conditions:
-                //  - same weld as the other dropdown (would make couplings identical);
-                //  - PlanetStack option, unless the other dropdown is CarrierToCarrier
-                //    (a single stacked pinion physically requires the carriers to be
-                //    coupled — see Edge-Case Catalogue #19).
-                disabled <-- v.signal.map(UiLogic.couplingOptionDisabled(_, CouplingSlot.First, c)),
-                Coupling.label(c)
-              )
-            }
-          ),
-          label(cls := "stage-coupling-row",
-            cls("disabled") <-- compoundSig.map(!_),
-            "Coupling 2"
-          ),
-          select(cls := "role-select",
-            disabled <-- compoundSig.map(!_),
-            titleAttr := "Second inter-stage weld. The classic compound uses stacked planets (P1 ↔ P2).",
-            onChange.mapToValue --> Observer[String] { name =>
-              safeSet(v, UiLogic.setCoupling(v.now(), CouplingSlot.Second, Coupling.valueOf(name)))
-            },
-            Coupling.values.toSeq.map { c =>
-              option(
-                value := c.toString,
-                selected <-- v.signal.map(_.secondCoupling == c),
-                disabled <-- v.signal.map(UiLogic.couplingOptionDisabled(_, CouplingSlot.Second, c)),
-                Coupling.label(c)
-              )
-            }
-          ),
-          // Manufacturing / bearing-topology note for the chosen welds.
-          div(cls := "coupling-note",
-            child.text <-- v.signal.map { t =>
-              if t.stages != 2 then ""
-              else
-                val n1 = Coupling.manufacturingNote(t.firstCoupling)
-                val n2 = Coupling.manufacturingNote(t.secondCoupling)
-                Seq(n1, n2).filter(_.nonEmpty).mkString("  ·  ")
-            }
-          ),
-          label("Input"),
-          rolePicker(v, inputBody, BodyRole.Input,
-            "Body driven externally (e.g. by a motor)."),
-          label("Output"),
-          rolePicker(v, outputBody, BodyRole.Output,
-            "Body whose speed defines the gearbox ratio."),
-          label("Fixed"),
-          rolePicker(v, fixedBody, BodyRole.Fixed,
-            "Body grounded to the housing (ω = 0). Required to remove the remaining DOF."),
+        sunToggle(1, "Stage 1 has its own sun gear"),
+        sunToggle(2, "Stage 2 has its own sun gear"),
+        div(cls := "field-hint",
+          "Without a sun the planets mesh only with the ring, so the sun-teeth range and its spacing rule do not apply to that stage."),
+        couplingPicker(CouplingSlot.First, "Coupling 1",
+          "First inter-stage weld. The classic compound uses Carrier 1 ↔ Carrier 2.", _.firstCoupling),
+        couplingPicker(CouplingSlot.Second, "Coupling 2",
+          "Second inter-stage weld. The classic compound uses stacked planets (P1 ↔ P2).", _.secondCoupling),
+        div(cls := "coupling-note",
+          child.text <-- v.signal.map { t =>
+            if t.stages != 2 then ""
+            else
+              Seq(Coupling.manufacturingNote(t.firstCoupling), Coupling.manufacturingNote(t.secondCoupling))
+                .filter(_.nonEmpty).mkString("  ·  ")
+          }
+        ),
+        // Phased pinions: only meaningful for stacked planets.
+        div(
+          cls("hidden") <-- stackedSig.map(!_),
           label(cls := "topology-toggle",
-            cls("disabled") <-- compoundSig.map(!_),
             input(typ := "checkbox",
-              disabled <-- compoundSig.map(!_),
-              controlled(
-                checked <-- s2PresentSig,
-                onInput.mapToChecked --> Observer[Boolean] { b =>
-                  safeSet(v, UiLogic.setS2Present(v.now(), b))
-                }
-              )
-            ),
+              controlled(checked <-- phased.signal, onInput.mapToChecked --> phased)),
             span(cls := "switch"),
-            span(titleAttr := "When off, stage 2 has no sun gear (NSS). " +
-                              "Doesn't change the ratio formula, but expands the search space " +
-                              "and removes one mesh worth of friction.",
-                 "Stage 2 has its own sun gear")
+            span("Individually phased pinions")
           ),
-          // Legacy derived label inside the advanced section — handy for power
-          // users who want the literal role-tuple description.
-          div(cls := "topology-derived legacy-derived",
-            child.text <-- v.signal.map(t => s"→ ${topologyLabel(t)}")
-          )
-        )
+          div(cls := "field-hint",
+            "Off: every planet is the same one-piece part. On: each planet gets its own twist between the two halves, " +
+            "so more tooth combinations assemble, but the N planets are different parts.")
+        ),
+        rolePicker("Input", inputBody, _.input, BodyRole.Input, "Body driven externally (e.g. by a motor)."),
+        rolePicker("Output", outputBody, _.output, BodyRole.Output, "Body whose speed defines the gearbox ratio."),
+        rolePicker("Fixed", fixedBody, _.fixed, BodyRole.Fixed, "Body grounded to the housing (ω = 0)."),
+        div(cls := "topology-derived legacy-derived",
+          child.text <-- v.signal.map(t => s"→ ${topologyLabel(t)}"))
       )
     )
 
-  /** A native <select> bound to `topology.roles.find(_._2 == targetRole)`. */
-  private def rolePicker(
-      v: Var[Topology],
-      currentSig: Signal[Body],
-      targetRole: BodyRole,
-      tooltip: String
-  ): HtmlElement =
-    select(cls := "role-select",
-      titleAttr := tooltip,
-      onChange.mapToValue --> Observer[String] { bodyName =>
-        val b = Body.valueOf(bodyName)
-        safeSet(v, UiLogic.assignRole(v.now(), b, targetRole))
-      },
-      // We render an option for every Body, disabling those that are Absent
-      // in the current topology so the user sees the full set with NSS-hidden
-      // ones greyed out, not surprisingly missing.
-      Body.values.toSeq.map { b =>
-        option(
-          value := b.toString,
-          selected <-- currentSig.map(_ == b),
-          disabled <-- v.signal.map { t =>
-            // Disable bodies that don't exist in this topology (S2/R2 in single,
-            // S2 when NSS), but keep the current selection visible.
-            val absentInTop = !t.roles.contains(b) || t.roles.get(b).contains(BodyRole.Absent)
-            absentInTop
-          },
-          Body.label(b)
-        )
-      }
-    )
-
   private def topologyLabel(t: Topology): String =
-    val legacy = t.legacyMode match
-      case Some(Mode.Standard)    => "Standard"
-      case Some(Mode.CDCP)        => "CDCP"
-      case Some(Mode.NSS)         => "NSS"
-      case Some(Mode.SingleStage) => "Single"
-      case None                   => "custom"
-    val desc =
-      if t.stages == 1 then s"single-stage, ${Body.label(t.input).toLowerCase} in, " +
-                            s"${Body.label(t.output).toLowerCase} out, ${Body.label(t.fixed).toLowerCase} fixed"
-      else
-        val s2bit = if t.s2Present then "" else " (NSS)"
-        s"compound$s2bit: ${Body.label(t.input).toLowerCase} in, " +
-        s"${Body.label(t.output).toLowerCase} out, ${Body.label(t.fixed).toLowerCase} fixed"
-    s"$desc ($legacy)"
+    val legacy = t.legacyMode.map(_.toString).getOrElse(if t == Topology.sunlessCdcpCompound then "CDCP sun-less" else "custom")
+    val suns =
+      Seq(Option.when(!t.s1Present)("no sun 1"), Option.when(t.stages == 2 && !t.s2Present)("no sun 2")).flatten
+    val sunText = if suns.isEmpty then "" else suns.mkString(", ", ", ", "")
+    val pins = s"${Body.label(t.input).toLowerCase} in, ${Body.label(t.output).toLowerCase} out, ${Body.label(t.fixed).toLowerCase} fixed"
+    val kind = if t.stages == 1 then "single-stage" else "compound"
+    s"$kind: $pins$sunText ($legacy)"
 
-  private def sortPill(v: Var[SortBy], target: SortBy, labelText: String, tooltip: String): HtmlElement =
+  private def sortPill(
+      v: Var[SortBy], target: SortBy, hasTargets: Signal[Boolean], choose: SortBy => Unit
+  ): HtmlElement =
     button(
-      cls := "sort-pill",
+      cls := "sort-pill", typ := "button",
       cls("active") <-- v.signal.map(_ == target),
-      titleAttr := tooltip,
-      labelText,
-      onClick.preventDefault --> { _ => v.set(target) }
+      ariaPressed <-- v.signal.map(s => (s == target).toString),
+      titleAttr <-- hasTargets.map(UiLogic.sortTooltip(target, _)),
+      child.text <-- hasTargets.map(UiLogic.sortLabel(target, _)),
+      onClick.preventDefault --> { _ => choose(target) }
     )
 
   /** Min/max range row: label, dual-knob slider (clipped to slider bounds for
     * display only), and two number inputs that accept ANY integer (no
-    * clamping). The slider's `min`/`max` attributes limit the drag range, but
-    * the user can always type outside that range in the number boxes. If
-    * `lo > hi` at search time, `runSearch` silently swaps them before
-    * constructing `TeethBounds`.
-    */
+    * clamping). If `lo > hi` at search time, `buildConfig` swaps them. */
   private def rangeRow(
-      name: String, lo: Var[Int], hi: Var[Int], bounds: (Int, Int),
-      tooltip: String = ""
+      name: String, lo: Var[Int], hi: Var[Int], bounds: (Int, Int), tooltip: String = ""
   ): HtmlElement =
     val (absMin, absMax) = bounds
-
     inline def clipToSlider(v: Int): Int = math.max(absMin, math.min(v, absMax))
-
-    val lbl =
-      if tooltip.nonEmpty then label(titleAttr := tooltip, name)
-      else                     label(name)
+    val loId = freshId("range")
+    val hiId = freshId("range")
     div(cls := "range-row",
-      lbl,
+      label(forId := loId, titleAttr := tooltip, name),
       div(cls := "range-slider",
         div(cls := "range-track"),
         div(cls := "range-track-fill",
           styleAttr <-- lo.signal.combineWith(hi.signal).map { (l, h) =>
-            // Clamp display values to slider bounds so the fill bar never
-            // overshoots the track when the user types a value out of range.
-            val span     = (absMax - absMin).toDouble.max(1.0)
-            val loClip   = math.max(absMin, math.min(math.min(l, h), absMax))
-            val hiClip   = math.max(absMin, math.min(math.max(l, h), absMax))
-            val loFrac   = (loClip - absMin) / span
+            val span      = (absMax - absMin).toDouble.max(1.0)
+            val loClip    = math.max(absMin, math.min(math.min(l, h), absMax))
+            val hiClip    = math.max(absMin, math.min(math.max(l, h), absMax))
+            val loFrac    = (loClip - absMin) / span
             val widthFrac = (hiClip - loClip) / span
-            // Use calc() that accounts for the thumb width (14px) so the fill
-            // bar follows the thumb centres, not the parent edges.
             f"left: calc((100%% - 14px) * $loFrac%.4f + 7px); width: calc((100%% - 14px) * $widthFrac%.4f);"
           }
         ),
         input(
-          cls := "range-low", typ := "range",
+          cls := "range-low", typ := "range", ariaLabel := s"$name minimum (slider)",
           minAttr := absMin.toString, maxAttr := absMax.toString, stepAttr := "1",
           controlled(
-            // Display value clipped to slider range; underlying Var may hold a
-            // value outside that range (when the user typed it).
             value <-- lo.signal.map(v => clipToSlider(v).toString),
             onInput.mapToValue.map(_.toIntOption.getOrElse(lo.now())) --> lo
           )
         ),
         input(
-          cls := "range-high", typ := "range",
+          cls := "range-high", typ := "range", ariaLabel := s"$name maximum (slider)",
           minAttr := absMin.toString, maxAttr := absMax.toString, stepAttr := "1",
           controlled(
             value <-- hi.signal.map(v => clipToSlider(v).toString),
@@ -860,44 +821,48 @@ object App:
         )
       ),
       div(cls := "range-inputs",
-        intInput(lo),
-        intInput(hi)
+        intInput(lo, loId, s"$name minimum"),
+        intInput(hi, hiId, s"$name maximum")
       )
     )
 
-  private def labeled(
-      name: String, tooltip: String = "", placeholderText: Option[String] = None
-  )(el: HtmlElement): HtmlElement =
-    val _ = placeholderText // accepted for caller-side documentation; the el carries its own
-    val lbl =
-      if tooltip.nonEmpty then label(titleAttr := tooltip, name)
-      else                     label(name)
-    div(lbl, el)
-
-  private def intInput(v: Var[Int]): HtmlElement =
-    input(
-      typ := "number",
-      controlled(
-        value <-- v.signal.map(_.toString),
-        onInput.mapToValue.map(_.toIntOption.getOrElse(v.now())) --> v
-      )
+  /** Label + control; `mk` receives the id that ties them together. */
+  private def labeled(name: String, tooltip: String = "")(mk: String => HtmlElement): HtmlElement =
+    val id = freshId("field")
+    div(
+      if tooltip.nonEmpty then label(forId := id, titleAttr := tooltip, name) else label(forId := id, name),
+      mk(id)
     )
 
-  private def numInput(v: Var[Double]): HtmlElement =
+  /** Text input bound to an Int that keeps what the user typed and commits
+    * only text that parses (so "-" or "" never overwrite the value). */
+  private def intInput(v: Var[Int], id: String, aria: String): HtmlElement =
+    val text = Var(v.now().toString)
     input(
-      typ := "text",
-      inputMode := "decimal",
-      controlled(
-        value <-- v.signal.map(_.toString),
-        onInput.mapToValue.map(s => parseDouble(s).getOrElse(v.now())) --> v
-      )
+      idAttr := id, typ := "text", inputMode := "numeric", ariaLabel := aria,
+      cls("invalid") <-- text.signal.map(t => t.trim.toIntOption.isEmpty),
+      value := text.now(),
+      value <-- v.signal.changes.filter(x => UiLogic.shouldRewrite(text.now(), x)).map { x => text.set(x.toString); x.toString },
+      onInput.mapToValue --> Observer[String] { s =>
+        text.set(s)
+        s.trim.toIntOption.foreach(v.set)
+      }
     )
 
-  private def strInput(v: Var[String]): HtmlElement =
+  private def fmtField(d: Double): String =
+    if d == math.rint(d) && math.abs(d) < 1e15 then d.toLong.toString else d.toString
+
+  /** Text input bound to a Double; same keep-the-text rule as `intInput`. */
+  private def numInput(v: Var[Double], id: String): HtmlElement =
+    val text = Var(fmtField(v.now()))
     input(
-      typ := "text",
-      controlled(
-        value <-- v.signal,
-        onInput.mapToValue --> v
-      )
+      idAttr := id, typ := "text", inputMode := "decimal",
+      cls("invalid") <-- text.signal.map(t => UiLogic.parseFinite(t).isEmpty),
+      ariaInvalid <-- text.signal.map(t => UiLogic.parseFinite(t).isEmpty.toString),
+      value := text.now(),
+      value <-- v.signal.changes.filter(x => UiLogic.shouldRewrite(text.now(), x)).map { x => val s = fmtField(x); text.set(s); s },
+      onInput.mapToValue --> Observer[String] { s =>
+        text.set(s)
+        UiLogic.parseFinite(s).foreach(v.set)
+      }
     )
