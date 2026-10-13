@@ -147,14 +147,3 @@ object RoleSolver:
     else
       val q = w.ratioOrNaN
       if q.isNaN then None else Some(Ratio.unsafe(q))
-
-  /** Ratio + a flag saying whether the elimination was well-conditioned
-    * (smallest pivot >= 1e-6; otherwise the value may be numerically noisy). */
-  def ratioWithConditioning(
-      topology: Topology, stage1: GearSet, stage2: Option[GearSet]
-  ): Option[(Ratio, Boolean)] =
-    val w = new Workspace(topology)
-    if !w.solve(stage1, stage2.orNull, 1.0) then None
-    else
-      val q = w.ratioOrNaN
-      if q.isNaN then None else Some((Ratio.unsafe(q), w.minPivot >= 1e-6))
