@@ -77,8 +77,21 @@ no test yet) · **design** (needs a decision) · **limitation** (documented, not
 | D4 | **Efficiency model.** It counts meshes only and ignores power recirculation, which dominates high-ratio compound planetaries | Real efficiency at 50:1 can be far below the shown 94 % |
 | D5 | **Single source of truth.** Proposal: `Topology` replaces `Mode` everywhere; `Mode` becomes a CLI/URL alias for the four canonical layouts (ADR 0015) | Root cause of B2, B3, B5, U6, P5 |
 
+## Reference program: what is wrong, right and unverified
+The spec is physics (Willis kinematics, gear geometry), not the reference program
+(`Compound Planetary Caluclator CDCP.py`, 2019). The reference is one independent
+cross-check; where it disagrees with first principles, first principles win and
+the differential test encodes the deviation explicitly.
+
+| ID | Reference behaviour | Verdict | How we handle it |
+|---|---|---|---|
+| R1 | `MatchSets` loops over `Planet1`/`Planet2` without `global`, so `DecideIfPrint` always checks `PlanetSpacingOK[0]` | **Defect.** NSS spacing filter is meaningless: `nssfix_A_N3` gives 0 rows; `nss_A_N4` equals CDCP | `nssfix_*` fixtures repair it in memory; literal `nss_*` fixtures stay as `.fail` |
+| R2 | `+NumPlanets` (line ~371) is a no-op; the loop keeps raising `MinModule` | **Defect.** Only `MinPlanets` is ever searched | Fixtures are generated per N, first pass only |
+| R3 | Planet fit uses `atan(π/N)·c2c·2` and `6.28319` | **Defect** (approximation; stricter than the exact chord, 0.808 vs 0.866 at N=3) | We use the exact chord plus an explicit clearance (ADR 0016); comparison on the intersection of both predicates |
+| R4 | `m1 = OD/(R1+2)` treats the ring as an external gear | **Defect.** Real ring exceeds the OD | ADR 0016: `m1 = (OD − 2·wall)/(R1+2.5)`; comparison applies the reference rule in the test |
+| R5 | Exclusive `range()` maxima, strict ring/module bounds | Quirk | Translated in the test; ours are inclusive |
+| R6 | Ratio `1/((Tr2 − Tr1·Tp2/Tp1)/Tr2 · Ts1/(Tr1+Ts1))` (CDCP: carrier factor 1) | **Correct** (re-derived from Willis; matches `RoleSolver` and `TabularSolver`) | Used as an oracle |
+| R7 | Spacing `(S+R) % N == 0` per stage for Standard; none for sun-less stages | **Unverified** in both the reference and ours. For a stepped pinion meshing four gears the real assembly condition may be joint | Under investigation: first-principles tooth-phase check |
+
 ## Not bugs
-- The reference program's NSS mode never reads per-pair spacing: the loop
-  variables are not declared global, so it checks gear set 0 for every pair. The
-  `nssfix_*` fixtures repair that in memory only.
 - Ratio sign is ignored by design when scoring.
