@@ -46,6 +46,18 @@ lazy val cli = (project in file("cli"))
     fork                := true
   )
 
+// Static site for the web UI: index.html + main.js in web/target/dist.
+//   sbt web/webDist     optimized build (fullLinkJS), for release
+//   sbt web/webDistDev  fast, unoptimized build (fastLinkJS), for development
+lazy val webDist    = taskKey[File]("Optimized static site in web/target/dist")
+lazy val webDistDev = taskKey[File]("Unoptimized (fast link) static site in web/target/dist")
+
+def copySite(linked: File, resources: File, out: File): File = {
+  IO.copyFile(linked / "main.js", out / "main.js")
+  IO.copyFile(resources / "index.html", out / "index.html")
+  out
+}
+
 lazy val web = (project in file("web"))
   .enablePlugins(ScalaJSPlugin)
   .dependsOn(core.js)
@@ -53,6 +65,16 @@ lazy val web = (project in file("web"))
     name := "cpgc-web",
     scalaJSUseMainModuleInitializer := true,
     scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.NoModule)),
+    webDist := {
+      (Compile / fullLinkJS).value
+      copySite((Compile / fullLinkJS / scalaJSLinkerOutputDirectory).value,
+        (Compile / resourceDirectory).value, target.value / "dist")
+    },
+    webDistDev := {
+      (Compile / fastLinkJS).value
+      copySite((Compile / fastLinkJS / scalaJSLinkerOutputDirectory).value,
+        (Compile / resourceDirectory).value, target.value / "dist")
+    },
     libraryDependencies ++= Seq(
       "org.scala-js" %%% "scalajs-dom" % "2.8.0",
       "com.raquo"    %%% "laminar"     % "17.2.0",

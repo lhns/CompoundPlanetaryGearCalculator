@@ -27,7 +27,7 @@ no test yet) · **design** (needs a decision) · **limitation** (documented, not
 | B6 | `canonicalKey` ignores the planet count; repeated or close targets give duplicates | Distinct N=3/N=4 designs are merged; duplicate rows | **fixed** (was: confirmed-test) |
 | B7 | `firstStageOD <= 0` throws in `Module.apply` instead of returning no results | CLI stack trace; web "Search failed" toast | **fixed** (was: confirmed-test, confirmed-run) |
 | B8 | CLI without a target prints the first N enumerated designs, unsorted | `--top` is not a top-K | **fixed** (was: confirmed-read) |
-| B9 | Web search keeps the first 10 000 designs in enumeration order (plus a 5 s time cap), then sorts | Best designs can fall outside the cap; truncated runs vary between runs | core fixed (engine top-K); web wiring in progress |
+| B9 | Web search keeps the first 10 000 designs in enumeration order (plus a 5 s time cap), then sorts | Best designs can fall outside the cap; truncated runs vary between runs | **fixed** (engine top-K; the web drives the same engine) |
 | B10 | `math.round(x).toInt` overflow and absolute singularity thresholds can leak near-infinite ratios | Rare garbage rows | open (low): closed-form overflow gone with the inverse solvers; absolute singularity threshold remains |
 
 ## Mode vs topology (core model)
