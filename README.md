@@ -50,6 +50,24 @@ sbt web/fastLinkJS
 A minimal `index.html` is included; point a static file server at the `web` output
 directory or copy `main.js` next to `index.html` and open it in a browser.
 
+- **Search**: the page drives the same `SearchEngine` as the CLI in ~12 ms chunks, capped at 5 s
+  (then "best so far, truncated, narrow your ranges"). Changing the sort re-ranks in place when the
+  run finished untruncated and kept every design; otherwise it searches again. Without a target the
+  default sort is the lowest ratio, and the pill says so.
+- **Topology**: pick a preset (including "CDCP (sun-less)"), or open "Advanced topology" for per-stage
+  sun toggles (a sun that is pinned or welded cannot be removed; the toggle says why), couplings,
+  Input/Output/Fixed bodies and "Individually phased pinions" (stacked layouts only: each planet gets
+  its own twist, so more designs assemble but the planets are different parts). "Advanced gear
+  constraints" has min module, max planet/sun ratio, ring wall (mm) and planet clearance (modules).
+- **Targets**: separate several with `;` or a space; a comma between digits is a decimal comma
+  (`53,12` = 53.12, `100, 53.12` = two targets). Invalid input shows an inline error, never a hang.
+- **URL**: the address bar mirrors the whole state and is read back on load. Parameters: `mode`
+  (`standard|single|cdcp|nss|cdcp-sunless`), `coupling1`, `coupling2` (`Coupling` names), `input`,
+  `output`, `fixed` (all three, `Body` names), `absent` (e.g. `S1,S2`), `sun`, `planet`, `ring`,
+  `planets` (`lo-hi` or a single value), `od`, `minmod`, `ringwall`, `clearance`, `spfact`, `phased=1`,
+  `target`, `sort` (`bestfit|ratio|efficiency|simplicity`). Values are percent-encoded.
+- Light and dark themes follow `prefers-color-scheme`; the layout is a single column on phones.
+
 ### Library
 
 ```scala
