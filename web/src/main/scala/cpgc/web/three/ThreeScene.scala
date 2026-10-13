@@ -1,21 +1,22 @@
 package cpgc.web.three
 
 import cpgc.kinematics.BodyAngles
-import cpgc.web.Layout3D
-import cpgc.web.Layout3D.{Bar, Cyl, Extruded, Prim, Tone}
+import cpgc.web.Palette.Tone
+import cpgc.web.Scene3D
+import cpgc.web.Scene3D.{Bar, Cyl, Extruded, Prim}
 import cpgc.web.three.Three.*
 import scala.collection.mutable
 import scala.scalajs.js
 
-/** The meshes of one design, built from its `Layout3D`. Built once per design; `pose` only sets rotations. */
-final class ThreeScene(layout: Layout3D.Layout, color: Tone => Int):
+/** The meshes of one design, built from its `Scene3D` layout. Built once per design; `pose` only sets rotations. */
+final class ThreeScene(layout: Scene3D.Layout, color: Tone => Int):
 
   val root: Group = new Group()
 
   private val geometries = mutable.ArrayBuffer.empty[BufferGeometry]
   private val materials  = mutable.Map.empty[Int, MeshStandardMaterial]
-  private val clusterGroups = mutable.ArrayBuffer.empty[(Layout3D.Cluster, Group)]
-  private val planetGroups  = mutable.ArrayBuffer.empty[(Layout3D.PlanetPart, Group)]
+  private val clusterGroups = mutable.ArrayBuffer.empty[(Scene3D.Cluster, Group)]
+  private val planetGroups  = mutable.ArrayBuffer.empty[(Scene3D.PlanetPart, Group)]
 
   private def material(tone: Tone): MeshStandardMaterial =
     val c = color(tone)
@@ -27,7 +28,8 @@ final class ThreeScene(layout: Layout3D.Layout, color: Tone => Int):
     new Mesh(g, material(tone))
 
   private def toMesh(p: Prim): Mesh = p match
-    case Extruded(outline, outerRadius, z0, z1, tone, _, _) =>
+    case e @ Extruded(gear, z0, z1) =>
+      val (outline, outerRadius, tone) = (e.outline, gear.outerRadius, e.tone)
       val shape = new Shape()
       def trace(path: Path): Unit =
         path.moveTo(outline.head._1, outline.head._2)
@@ -67,8 +69,8 @@ final class ThreeScene(layout: Layout3D.Layout, color: Tone => Int):
 
   /** Set every rotation from the body angles (schematic convention: clockwise positive, hence the sign). */
   def pose(a: BodyAngles): Unit =
-    clusterGroups.foreach((c, g) => g.rotation.z = -Layout3D.clusterAngle(c, a))
-    planetGroups.foreach((p, g) => g.rotation.z = -Layout3D.planetAngle(p, a))
+    clusterGroups.foreach((c, g) => g.rotation.z = -Scene3D.clusterAngle(c, a))
+    planetGroups.foreach((p, g) => g.rotation.z = -Scene3D.planetAngle(p, a))
 
   def dispose(): Unit =
     geometries.foreach(_.dispose())

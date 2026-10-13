@@ -3,7 +3,7 @@ package cpgc.web
 import com.raquo.laminar.api.L.*
 import cpgc.domain.CompoundDesign
 import cpgc.kinematics.Kinematics
-import cpgc.web.Layout3D.Tone
+import cpgc.web.Palette.Tone
 import cpgc.web.UiKit.ariaLabel
 import cpgc.web.three.*
 import cpgc.web.three.Three.*
@@ -16,32 +16,11 @@ object ThreeView:
 
   private val FovDeg = 35.0
 
-  // Part colours; stage tints match the 2D schematic. Input / output / fixed read the page's CSS accents.
-  private val BaseColors: Map[Tone, Int] = Map(
-    Tone.Sun1 -> 0xffd166, Tone.Ring1 -> 0x118ab2, Tone.Planet1 -> 0x06d6a0,
-    Tone.Sun2 -> 0xff9f1c, Tone.Ring2 -> 0x9d4edd, Tone.Planet2 -> 0x73d2de,
-    Tone.Carrier -> 0x8b949e,
-    Tone.Fixed -> 0x4b5563, Tone.Input -> 0x7ee787, Tone.Output -> 0x58a6ff
-  )
+  private def light: Boolean =
+    try dom.window.matchMedia("(prefers-color-scheme: light)").matches catch case _: Throwable => false
 
-  /** `#rrggbb` value of a CSS custom property, if it has that form. */
-  private def cssColor(name: String): Option[Int] =
-    try
-      val v = dom.window.getComputedStyle(dom.document.documentElement).getPropertyValue(name).trim
-      Option.when(v.matches("#[0-9a-fA-F]{6}"))(Integer.parseInt(v.drop(1), 16))
-    catch case _: Throwable => None
-
-  // Coupling accents, as in `Schematic` (amber, teal): dark / light theme pairs.
-  private def couplingColors(): (Int, Int) =
-    val light = try dom.window.matchMedia("(prefers-color-scheme: light)").matches catch case _: Throwable => false
-    if light then (0xb35c00, 0x007c7c) else (0xffb000, 0x19c3b1)
-
-  private def palette(): Tone => Int =
-    val roles = Map(Tone.Input -> "--role-input", Tone.Output -> "--role-output")
-    val (c1, c2) = couplingColors()
-    BaseColors ++ roles.flatMap((t, v) => cssColor(v).map(t -> _)) ++ Map(Tone.Cpl1 -> c1, Tone.Cpl2 -> c2)
-
-  private def hex(c: Int): String = f"#$c%06x"
+  private def color(t: Tone): Int = Palette.hex(t, light)
+  private def css(t: Tone): String = Palette.hexString(color(t))
 
   private def message(state: SearchState, found: Int): String = state match
     case SearchState.NoResults => "No design matches these constraints."
@@ -89,8 +68,9 @@ object ThreeView:
     def show(d: Option[CompoundDesign]): Vector[(Int, cpgc.constraints.Coupling)] =
       clear()
       val cs = d.fold(Vector.empty[(Int, cpgc.constraints.Coupling)]) { design =>
-        val layout = Layout3D.build(design)
-        val s      = new ThreeScene(layout, palette())
+        val model  = GearboxScene.of(design)
+        val layout = Scene3D.build(model)
+        val s      = new ThreeScene(layout, color)
         scene.add(s.root)
         current = Some((design, s))
         val home = OrbitState.Home(
@@ -98,7 +78,7 @@ object ThreeView:
           layout.outerRadius * 2.6 * 35.0 / FovDeg)
         orbit.rehome(home)
         pose(phase)
-        layout.couplings
+        model.couplings
       }
       draw()
       cs
@@ -136,11 +116,9 @@ object ThreeView:
           case (_, None, st, n)            => message(st, n)
         }),
       div(cls := "three-legend",
-        swatch("var(--role-input)", "input"), swatch("var(--role-output)", "output"),
-        swatch("#4b5563", "fixed"),
+        swatch(css(Tone.Input), "input"), swatch(css(Tone.Output), "output"), swatch(css(Tone.Fixed), "fixed"),
         children <-- couplings.signal.map { cs =>
-          val (c1, c2) = couplingColors()
-          cs.map((slot, c) => swatch(hex(if slot == 1 then c1 else c2), SchematicLayout.couplingLegendLabel(c)))
+          cs.map((slot, c) => swatch(css(if slot == 1 then Tone.Cpl1 else Tone.Cpl2), SchematicLayout.couplingLegendLabel(c)))
         }),
       onMountUnmountCallbackWithState[HtmlElement, Option[Live]](
         mount = ctx =>
