@@ -1,6 +1,6 @@
 package cpgc.web
 
-import cpgc.constraints.Body
+import cpgc.constraints.{Body, Coupling, Topology}
 import cpgc.domain.Stage
 import cpgc.render.GearGeometry
 import cpgc.render.GearGeometry.{gearRadii as coreGearRadii}
@@ -24,6 +24,7 @@ object SchematicLayout:
       planetPitchR: Double,
       ringPitchR: Double,
       ringOR: Double,
+      sunOR: Double,
       carrierR: Double,
       planets: Vector[(Double, Double)],
       ringBadge: (Double, Double),
@@ -53,7 +54,8 @@ object SchematicLayout:
     StageLayout(
       cx = cx, scale = scale, mPx = mPx,
       sunPitchR = sunPitchR, planetPitchR = planetPitchR, ringPitchR = ringPitchR,
-      ringOR = ringOR, carrierR = carrierR,
+      ringOR = ringOR, sunOR = coreGearRadii(stage.set.sun.toInt, mPx, internal = false).outer,
+      carrierR = carrierR,
       planets = Vector.tabulate(n)(planetPosition(_, n, cx, carrierR)),
       ringBadge = (cx, -ringOR - 4),
       sunBadge = (cx, -sunPitchR - mPx * 1.6),
@@ -69,16 +71,63 @@ object SchematicLayout:
     val deg = angleRad * 180.0 / math.Pi
     s"rotate(${"%.4f".format(deg)} ${"%.3f".format(ox)} ${"%.3f".format(oy)})"
 
-  /** Visual anchor (x, y in viewBox units) of a body within a stage group
-    * centred at `cx`. Suns sit at the centre (y=0), rings at the top rim
-    * (y=-100), carriers slightly below centre (y=+40 — the carrier disc). */
-  def bodyAnchor(b: Body, cx1: Double, cx2: Double): (Double, Double) = b match
-    case Body.S1 => (cx1, 0.0)
-    case Body.C1 => (cx1, 40.0)
-    case Body.R1 => (cx1, -100.0)
-    case Body.S2 => (cx2, 0.0)
-    case Body.C2 => (cx2, 40.0)
-    case Body.R2 => (cx2, -100.0)
+  // ── Inter-stage couplings ──────────────────────────────────────────────────
+
+  /** Which coupling (1 = first, 2 = second) joins each body, and which one stacks the planets.
+    * Absent suns never appear: `Topology` forbids welding them. Single stages have none. */
+  final case class CouplingMarks(bodies: Map[Body, Int], planets: Option[Int])
+
+  def couplingMarks(t: Topology): CouplingMarks =
+    if t.stages < 2 then CouplingMarks(Map.empty, None)
+    else
+      val slots = Seq(1 -> t.firstCoupling, 2 -> t.secondCoupling)
+      val bodies = (for
+        (slot, c) <- slots
+        (a, b)    <- Coupling.bodyPair(c).toSeq
+        body      <- Seq(a, b) if t.presentBodies.contains(body)
+      yield body -> slot).toMap
+      CouplingMarks(bodies, slots.collectFirst { case (slot, Coupling.PlanetStack) => slot })
+
+  /** Legend text for a coupling. */
+  def couplingLegendLabel(c: Coupling): String = c match
+    case Coupling.PlanetStack      => "stacked planets (one part)"
+    case Coupling.CarrierToCarrier => "Carrier 1 ↔ Carrier 2 (shared)"
+    case other                     => Coupling.label(other)
+
+  /** Drawn connector between two coupled bodies: quadratic Bézier `from` → `to` via `ctrl`. */
+  final case class Connector(from: (Double, Double), ctrl: (Double, Double), to: (Double, Double))
+
+  /** Angle (degrees above/below the horizontal) at which a central weld leaves a body's rim,
+    * facing the other stage. Slot 1 runs above the mid-line, slot 2 below, so two welds never cross. */
+  val PortAngleDeg = 35.0
+
+  /** Outer radius of a central body in the drawing; a coupled carrier is welded at its hub. */
+  def rimRadius(b: Body, lay: StageLayout): Double = b match
+    case Body.S1 | Body.S2 => lay.sunOR
+    case Body.C1 | Body.C2 => lay.carrierR
+    case Body.R1 | Body.R2 => lay.ringOR
+
+  /** Connector for a central weld in coupling `slot` (1 or 2), ending on the welded bodies' rims,
+    * facing each other across the gap between the stages. `CarrierToCarrier` joins the two hubs;
+    * `PlanetStack` has no central connector. */
+  def connector(c: Coupling, slot: Int, lay1: StageLayout, lay2: StageLayout): Option[Connector] =
+    Coupling.bodyPair(c).map { (b1, b2) =>
+      val phi = math.toRadians(if slot == 1 then -PortAngleDeg else PortAngleDeg)
+      def port(lay: StageLayout, b: Body, toward: Double): (Double, Double) =
+        if c == Coupling.CarrierToCarrier then (lay.cx, 0.0)
+        else
+          val r = rimRadius(b, lay)
+          (lay.cx + toward * r * math.cos(phi), r * math.sin(phi))
+      val from = port(lay1, b1, 1.0)
+      val to   = port(lay2, b2, -1.0)
+      val bow  = if c == Coupling.CarrierToCarrier then 0.0 else if slot == 1 then -10.0 else 10.0
+      Connector(from, ((from._1 + to._1) / 2.0, (from._2 + to._2) / 2.0 + bow), to)
+    }
+
+  /** Centre of planet `i` of `n` after the carrier has turned by `carrierRad`. */
+  def planetPositionAt(i: Int, n: Int, cx: Double, carrierR: Double, carrierRad: Double): (Double, Double) =
+    val theta = 2.0 * math.Pi * i / n - math.Pi / 2.0 + carrierRad
+    (cx + carrierR * math.cos(theta), carrierR * math.sin(theta))
 
   // ── Involute tooth geometry ────────────────────────────────────────────────
   //
