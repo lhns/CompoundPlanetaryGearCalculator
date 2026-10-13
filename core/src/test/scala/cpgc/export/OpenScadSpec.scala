@@ -90,7 +90,7 @@ class OpenScadSpec extends FunSuite:
   }
 
   test("golden: ring rim width follows the wall (ADR 0016)") {
-    val wall = Stage.DefaultRingWall
+    val wall = cpgc.constraints.SearchConfig.DefaultRingWall
     assert(st1.text.contains(s"rim_width=${Numeric.fixed(wall, 6)}"), st1.text)
   }
 
