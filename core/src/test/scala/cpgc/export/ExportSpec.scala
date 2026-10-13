@@ -61,7 +61,7 @@ class ExportSpec extends FunSuite:
     assertEquals(csvCells(sunless).last, "S1;S2")
     assertEquals(csvCells(s1Absent).last, "S1")
     assertEquals(csvCells(single).drop(12), Vector("S1", "C1", "R1", "", "", ""))
-    for (_, d) <- all do assertEquals(csvCells(d).length, 19)
+    for (_, d) <- all do assertEquals(csvCells(d).length, 18)
   }
 
   test("JSON: topology object") {
