@@ -17,22 +17,9 @@ class TabularSolverSpec extends FunSuite:
 
   private val Seed = 1234L
 
-  /** Standard role tuple (S1 in, R2 out, R1 fixed) with a parameterised second
-    * coupling — the shared-carrier compound family. */
-  private def compound(second: Coupling): Topology =
-    Topology(
-      stages = 2,
-      roles = Map(
-        Body.S1 -> BodyRole.Input,
-        Body.R2 -> BodyRole.Output,
-        Body.R1 -> BodyRole.Fixed,
-        Body.C1 -> BodyRole.Free,
-        Body.S2 -> BodyRole.Free,
-        Body.C2 -> BodyRole.Free
-      ),
-      firstCoupling  = Coupling.CarrierToCarrier,
-      secondCoupling = second
-    )
+  /** Standard role tuple (S1 in, R2 out, R1 fixed), shared carrier, parameterised second coupling. */
+  private def withSecond(second: Coupling): Topology =
+    Topology.standardCompound.copy(secondCoupling = second)
 
   /** All topologies inside the TabularSolver's coverage. */
   private val coveredTopologies: Vector[(String, Topology)] = Vector(
@@ -40,11 +27,11 @@ class TabularSolverSpec extends FunSuite:
     "standard"    -> Topology.standardCompound,
     "cdcp"        -> Topology.cdcpCompound,
     "nss"         -> Topology.nssCompound,
-    "PlanetStack" -> compound(Coupling.PlanetStack),
-    "RingToSun"   -> compound(Coupling.RingToSun),
-    "SunToRing"   -> compound(Coupling.SunToRing),
-    "RingToRing"  -> compound(Coupling.RingToRing),
-    "SunToSun"    -> compound(Coupling.SunToSun),
+    "PlanetStack" -> withSecond(Coupling.PlanetStack),
+    "RingToSun"   -> withSecond(Coupling.RingToSun),
+    "SunToRing"   -> withSecond(Coupling.SunToRing),
+    "RingToRing"  -> withSecond(Coupling.RingToRing),
+    "SunToSun"    -> withSecond(Coupling.SunToSun),
     // Absent suns (ADR 0015 §2): the oracle solves a sun-less stage with its virtual sun.
     "sun-less CDCP (both absent)" -> Topology.sunlessCdcpCompound,
     "CDCP, S1 absent"             -> cdcpWith(absent = Set(Body.S1)),
@@ -61,13 +48,7 @@ class TabularSolverSpec extends FunSuite:
       absent: Set[Body],
       in: Body = Body.C1, fixed: Body = Body.R1, out: Body = Body.R2
   ): Topology =
-    val pins = Map(in -> BodyRole.Input, fixed -> BodyRole.Fixed, out -> BodyRole.Output)
-    Topology(
-      2,
-      Body.values.map(b => b -> (if absent(b) then BodyRole.Absent else pins.getOrElse(b, BodyRole.Free))).toMap,
-      Coupling.CarrierToCarrier,
-      second
-    )
+    ContractSupport.compound(in, out, fixed, Coupling.CarrierToCarrier, second, absent)
 
   private def randomGearSet(rng: Random): GearSet =
     GearSet(Teeth(rng.between(8, 60)), Teeth(rng.between(8, 30)), rng.between(3, 6))

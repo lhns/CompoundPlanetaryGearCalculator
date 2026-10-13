@@ -25,8 +25,8 @@ lazy val core = crossProject(JVMPlatform, JSPlatform)
   .settings(
     name := "cpgc-core",
     // Diagnostics (munit tag "diagnostic") are excluded by default. To run them:
-    //   sbt "project coreJVM" "set Test / testOptions := Seq()" "testOnly cpgc.SpacingExperimentSpec"
-    // (TopologyEnumerationDiag is JVM-only and writes docs/topology-enumeration.*)
+    //   sbt "project coreJVM" "set Test / testOptions := Seq()" "testOnly cpgc.verify.PerformanceDiag cpgc.verify.TopologyEnumerationDiag"
+    // (TopologyEnumerationDiag is JVM-only and writes target/diag/topology-enumeration.*)
     Test / testOptions += Tests.Argument(TestFrameworks.MUnit, "--exclude-tags=diagnostic"),
     libraryDependencies ++= Seq(
       "org.scalameta"  %%% "munit"           % "1.0.2"  % Test,

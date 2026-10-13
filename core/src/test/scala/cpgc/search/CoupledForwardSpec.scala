@@ -1,6 +1,6 @@
 package cpgc.search
 
-import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
+import cpgc.constraints.{Body, Coupling, Topology}
 import cpgc.domain.{GearSet, Teeth}
 import munit.FunSuite
 
@@ -19,17 +19,8 @@ class CoupledForwardSpec extends FunSuite:
   private val s1: GearSet = GearSet(Teeth(20), Teeth(15), 5)
   private val s2: GearSet = GearSet(Teeth(24), Teeth(12), 3)
 
-  private def standardRoles: Map[Body, BodyRole] = Map(
-    Body.S1 -> BodyRole.Input,
-    Body.R2 -> BodyRole.Output,
-    Body.R1 -> BodyRole.Fixed,
-    Body.C1 -> BodyRole.Free,
-    Body.S2 -> BodyRole.Free,
-    Body.C2 -> BodyRole.Free
-  )
-
   private def topology(c: Coupling): Topology =
-    Topology(stages = 2, roles = standardRoles, secondCoupling = c)
+    Topology.standardCompound.copy(secondCoupling = c)
 
   test("PlanetStack reproduces the legacy Standard ratio (regression guard)") {
     val r = RoleSolver.ratio(topology(Coupling.PlanetStack), s1, Some(s2))

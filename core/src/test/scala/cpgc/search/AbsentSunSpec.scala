@@ -172,12 +172,25 @@ class AbsentSunSpec extends FunSuite:
     assert(Enumerator.stage2Sets(cfg).exists(g => g.sun.toInt > 12))
   }
 
-  test("search / searchSteps agree on a sun-less topology") {
+  // -- NSS vs Standard (ADR 0012, 0015) -----------------------------------------
+
+  private def pairs(t: Topology): Set[(GearSet, GearSet)] =
     val cfg = SearchConfig(
-      topology = sunless, planetTeeth = TeethBounds(8, 10), ringTeeth = TeethBounds(36, 44),
-      planets = TeethBounds(3, 3), minModule = 0.0)
-    val a = Calculator.search(cfg).map(Scorer.canonicalKey).toSet
-    val b = Calculator.searchSteps(cfg).flatten.map(Scorer.canonicalKey).toSet
-    assert(a.nonEmpty)
-    assertEquals(b, a)
+      topology = t, sunTeeth = TeethBounds(10, 30), planetTeeth = TeethBounds(8, 20),
+      ringTeeth = TeethBounds(30, 100), planets = TeethBounds(3, 3), minModule = 0.3)
+    Calculator.search(cfg).map(d => (d.stage1.set, d.stage2.get.set)).toSet
+
+  test("NSS designs are a strict superset of Standard designs (no stage-2 sum rule without a sun)") {
+    val std = pairs(Topology.standardCompound)
+    val nss = pairs(Topology.nssCompound)
+    assertEquals(std -- nss, Set.empty[(GearSet, GearSet)])
+    assert((nss -- std).nonEmpty, "expected NSS to unlock designs Standard rejects")
+  }
+
+  test("NSS ratio equals Standard ratio when the stage-2 sum rule holds (the stage-2 sun is irrelevant)") {
+    val a = GearSet(Teeth(20), Teeth(15), 3)
+    val b = GearSet(Teeth(15), Teeth(15), 3) // (S2 + R2) % 3 == 0
+    val std = RoleSolver.ratio(Topology.standardCompound, a, Some(b)).get.value
+    val nss = RoleSolver.ratio(Topology.nssCompound, a, Some(b)).get.value
+    assertEqualsDouble(nss, std, 1e-12)
   }
