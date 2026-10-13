@@ -64,7 +64,7 @@ class ExportSpec extends FunSuite:
 
   test("JSON: topology object") {
     val j = Json.renderOne(sunless)
-    assert(j.contains(""""topology":{"modeName":"Custom","input":"C1","output":"R2","fixed":"R1","""), j)
+    assert(j.contains(""""topology":{"modeName":"CDCP (sun-less)","input":"C1","output":"R2","fixed":"R1","""), j)
     assert(j.contains(""""firstCoupling":"CarrierToCarrier","secondCoupling":"PlanetStack","absentSuns":["S1","S2"]}"""), j)
     val s = Json.renderOne(single)
     assert(s.contains(""""firstCoupling":null,"secondCoupling":null,"absentSuns":[]"""), s)
@@ -95,11 +95,11 @@ class ExportSpec extends FunSuite:
   }
 
   private val goldenPretty: String =
-    """┌────────┬────────┬───────┬───┬─────────┬────┬────┬────┬───────┬────┬────┬────┬───────┬─────────────────────────────────────────────────┬────────┐
-      |│ Mode   │ Ratio  │ Eff   │ N │ Spacing │ S1 │ P1 │ R1 │ M1    │ S2 │ P2 │ R2 │ M2    │ Layout                                          │ No sun │
-      |├────────┼────────┼───────┼───┼─────────┼────┼────┼────┼───────┼────┼────┼────┼───────┼─────────────────────────────────────────────────┼────────┤
-      |│ Custom │ 12.500 │ 0.900 │ 3 │ ok      │ —  │ 11 │ 47 │ 2.000 │ —  │ 10 │ 46 │ 2.000 │ C1→R2 | R1 fixed | CarrierToCarrier+PlanetStack │ S1;S2  │
-      |└────────┴────────┴───────┴───┴─────────┴────┴────┴────┴───────┴────┴────┴────┴───────┴─────────────────────────────────────────────────┴────────┘""".stripMargin
+    """┌─────────────────┬────────┬───────┬───┬─────────┬────┬────┬────┬───────┬────┬────┬────┬───────┬─────────────────────────────────────────────────┬────────┐
+      |│ Mode            │ Ratio  │ Eff   │ N │ Spacing │ S1 │ P1 │ R1 │ M1    │ S2 │ P2 │ R2 │ M2    │ Layout                                          │ No sun │
+      |├─────────────────┼────────┼───────┼───┼─────────┼────┼────┼────┼───────┼────┼────┼────┼───────┼─────────────────────────────────────────────────┼────────┤
+      |│ CDCP (sun-less) │ 12.500 │ 0.900 │ 3 │ ok      │ —  │ 11 │ 47 │ 2.000 │ —  │ 10 │ 46 │ 2.000 │ C1→R2 | R1 fixed | CarrierToCarrier+PlanetStack │ S1;S2  │
+      |└─────────────────┴────────┴───────┴───┴─────────┴────┴────┴────┴───────┴────┴────┴────┴───────┴─────────────────────────────────────────────────┴────────┘""".stripMargin
 
   // -- P6: non-finite numbers -------------------------------------------------
 
