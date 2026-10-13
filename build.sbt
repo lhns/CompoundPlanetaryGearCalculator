@@ -40,7 +40,8 @@ lazy val cli = (project in file("cli"))
   .settings(
     name := "cpgc-cli",
     libraryDependencies ++= Seq(
-      "com.monovore" %% "decline" % "2.4.1"
+      "com.monovore" %% "decline" % "2.4.1",
+      "org.scalameta" %% "munit" % "1.0.2" % Test
     ),
     Compile / mainClass := Some("cpgc.cli.Main"),
     fork                := true

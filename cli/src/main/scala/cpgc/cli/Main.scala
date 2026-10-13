@@ -1,11 +1,11 @@
 package cpgc.cli
 
-import cats.data.{Validated, ValidatedNel}
+import cats.data.{NonEmptyList, Validated, ValidatedNel}
 import cats.implicits.*
 import com.monovore.decline.*
 import cpgc.Calculator
-import cpgc.constraints.{SearchConfig, TeethBounds, Topology}
-import cpgc.domain.{Mode, Ratio}
+import cpgc.constraints.{SearchConfig, Topology}
+import cpgc.domain.Mode
 import cpgc.search.Scorer.SortBy
 import cpgc.`export`.{Csv, Json, OpenScad, Pretty}
 
@@ -62,7 +62,7 @@ object Search:
   private val ringWall     = Opts.option[Double]("ring-wall", "ring wall thickness (mm)").withDefault(SearchConfig.DefaultRingWall)
   private val planetClear  = Opts.option[Double]("planet-clearance", "minimum tip gap between adjacent planets (modules)").withDefault(SearchConfig.DefaultPlanetClearance)
   private val topK         = Opts.option[Int]("top", "top-K results per target").withDefault(10)
-  private val sunPlanet    = Opts.option[Double]("sun-planet-factor", "max planet/sun teeth ratio").withDefault(3.0)
+  private val sunPlanet    = Opts.option[Double]("sun-planet-factor", "max planet/sun teeth ratio").withDefault(SearchConfig.DefaultSunPlanetFactor)
   private val csvOut       = Opts.option[Path]("csv", "write CSV to this path").orNone
   private val jsonOut      = Opts.option[Path]("json", "write JSON to this path").orNone
   private val scadOut      = Opts.option[Path]("scad", "emit OpenSCAD for the top design").orNone
@@ -70,21 +70,6 @@ object Search:
   private val phased       = Opts.flag("phased-pinions", "stacked planets are cut with a planet-specific twist (drops the identical-pinion assembly rule, ADR 0018)").orFalse
   private val sortOpt      = Opts.option[String]("sort", "ranking: best | ratio | efficiency | simplicity (best = closest to the targets, or smallest ratio without targets)")
     .withDefault("best").mapValidated(s => Validated.fromOption(SortBy.parse(s), cats.data.NonEmptyList.one(s"--sort must be best, ratio, efficiency or simplicity, got '$s'")))
-
-  private def teeth(minLabel: String, maxLabel: String, b: (Int, Int)): ValidatedNel[String, TeethBounds] =
-    val (lo, hi) = b
-    if lo < 2 then Validated.invalidNel(s"--$minLabel must be >= 2, got $lo")
-    else if hi < lo then Validated.invalidNel(s"--$maxLabel ($hi) must be >= --$minLabel ($lo)")
-    else Validated.validNel(TeethBounds(lo, hi))
-
-  private def check(ok: Boolean, msg: => String): ValidatedNel[String, Unit] =
-    if ok then Validated.validNel(()) else Validated.invalidNel(msg)
-
-  private def finite(name: String, v: Double, positive: Boolean = false, nonNegative: Boolean = false): ValidatedNel[String, Double] =
-    if !v.isFinite then Validated.invalidNel(s"--$name must be a finite number, got $v")
-    else if positive && v <= 0.0 then Validated.invalidNel(s"--$name must be > 0, got $v")
-    else if nonNegative && v < 0.0 then Validated.invalidNel(s"--$name must be >= 0, got $v")
-    else Validated.validNel(v)
 
   /** The topology for `mode`, with the requested suns removed. Invalid
     * combinations (e.g. removing a pinned sun) become an error, not a throw. */
@@ -101,38 +86,17 @@ object Search:
 
   private final case class Run(cfg: SearchConfig, sort: SortBy, csv: Option[Path], json: Option[Path], scad: Option[Path], noTable: Boolean)
 
+  /** The topology comes from the mode and `--sunless`; all numeric validation is
+    * `SearchConfig.validate`, shared with the web UI. */
   private def validate(r: Raw): ValidatedNel[String, Run] =
-    (
-      topologyFor(r.mode, r.sunless),
-      teeth("min-sun", "max-sun", r.sun),
-      teeth("min-planet", "max-planet", r.planet),
-      teeth("min-ring", "max-ring", r.ring),
-      teeth("min-planets", "max-planets", r.planets),
-      finite("od", r.od, positive = true),
-      finite("min-module", r.minModule, nonNegative = true),
-      finite("ring-wall", r.ringWall, nonNegative = true),
-      finite("planet-clearance", r.clearance, nonNegative = true),
-      finite("sun-planet-factor", r.spf, positive = true),
-      r.targets.traverse(t => finite("target", t).map(Ratio.apply)),
-      check(r.top >= 1, s"--top must be >= 1, got ${r.top}")
-    ).mapN { (topo, sun, planet, ring, planets, od, mm, wall, clr, spf, ts, _) =>
-      Run(
-        SearchConfig(
-          topology        = topo,
-          sunTeeth        = sun,
-          planetTeeth     = planet,
-          ringTeeth       = ring,
-          planets         = planets,
-          minModule       = mm,
-          firstStageOD    = od,
-          sunPlanetFactor = spf,
-          targets         = ts,
-          topPerTarget    = r.top,
-          ringWall        = wall,
-          planetClearance = clr,
-          phasedPinions   = r.phased
-        ),
-        r.sort, r.csv, r.json, r.scad, r.noTable)
+    topologyFor(r.mode, r.sunless).andThen { topo =>
+      val input = SearchConfig.Input(
+        topology = topo, sun = r.sun, planet = r.planet, ring = r.ring, planets = r.planets,
+        firstStageOD = r.od, minModule = r.minModule, ringWall = r.ringWall, planetClearance = r.clearance,
+        sunPlanetFactor = r.spf, targets = r.targets, topPerTarget = r.top, phasedPinions = r.phased)
+      SearchConfig.validate(input) match
+        case Right(cfg) => Validated.validNel(Run(cfg, r.sort, r.csv, r.json, r.scad, r.noTable))
+        case Left(errs) => Validated.invalid(NonEmptyList.fromListUnsafe(errs))
     }
 
   val command: Opts[Unit] = (
