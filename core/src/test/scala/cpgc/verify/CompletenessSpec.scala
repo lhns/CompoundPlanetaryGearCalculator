@@ -46,7 +46,7 @@ class CompletenessSpec extends FunSuite:
 
   private val known = CompletenessKnown.table
 
-  for c <- cases.filterNot(x => x.name.contains("mode-only") && !x.name.startsWith("std")) do
+  for c <- cases do
     val baseCfg = c.config(bounded(Nil))
     lazy val ref = referenceDesigns(baseCfg)
     lazy val absRatios = ref.map(x => math.abs(x._3)).sorted
@@ -126,7 +126,7 @@ class CompletenessSpec extends FunSuite:
 
   // Observed: designs differing only in numPlanets share a canonicalKey, so Scorer.sort drops one.
   test("B6 canonicalKey distinguishes designs that differ only in numPlanets".fail) {
-    val cfg = SearchConfig(mode = Mode.SingleStage, planets = TeethBounds(2, 6),
+    val cfg = SearchConfig(topology = Topology.fromMode(Mode.SingleStage), planets = TeethBounds(2, 6),
       sunTeeth = TeethBounds(8, 14), planetTeeth = TeethBounds(8, 10), ringTeeth = TeethBounds(24, 34))
     val ds  = Calculator.search(cfg).toVector
     val byTeeth = ds.groupBy(d => (d.stage1.set.sun.toInt, d.stage1.set.planet.toInt))

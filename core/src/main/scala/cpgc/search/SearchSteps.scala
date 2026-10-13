@@ -1,7 +1,7 @@
 package cpgc.search
 
 import cpgc.constraints.SearchConfig
-import cpgc.domain.{CompoundDesign, GearSet, Mode}
+import cpgc.domain.{CompoundDesign, GearSet}
 
 /** Step-grained enumeration of all valid compound designs for `cfg`.
   *
@@ -9,7 +9,7 @@ import cpgc.domain.{CompoundDesign, GearSet, Mode}
   * exactly one unit of work and immediately returns control to the caller:
   *
   *   - `Some(d)` — this step produced and accepted a design.
-  *   - `None`    — this step advanced internal state (peeled the next stage-1
+  *   - `None`    — this step advanced internal state (peeled the next stage
   *                 candidate off the enumerator, evaluated a pair that didn't
   *                 form a valid compound design, etc.).
   *   - `hasNext == false` — the candidate space is consumed.
@@ -28,20 +28,23 @@ object SearchSteps:
   private final class StepIterator(cfg: SearchConfig)
       extends Iterator[Option[CompoundDesign]]:
 
-    private val stagesBuf  = scala.collection.mutable.ArrayBuffer.empty[GearSet]
-    private val stagesIter = Enumerator.gearSets(cfg).iterator
-    private val singleStage = cfg.mode == Mode.SingleStage
-    private val targets    = cfg.targets.toVector
-    // Closed-form `Compounder.stage2For` only exists for the four legacy
-    // topologies; novel role tuples fall back to the full cross product even
-    // when targets are present (Scorer ranks by target fit at the end).
-    private val useStage2For =
-      targets.nonEmpty && cfg.effectiveTopology.legacyMode.isDefined
+    private val topology    = cfg.topology
+    private val singleStage = topology.stages == 1
+    // Stage 1 and stage 2 draw from different pools when only one has a sun.
+    private val samePool    = topology.s1Present == topology.s2Present
+    private val buf1  = scala.collection.mutable.ArrayBuffer.empty[GearSet]
+    private val buf2  = if samePool then buf1 else scala.collection.mutable.ArrayBuffer.empty[GearSet]
+    private val iter1 = Enumerator.stage1Sets(cfg).iterator
+    private val iter2 = if samePool then Iterator.empty else Enumerator.stage2Sets(cfg).iterator
+    private val targets = cfg.targets.toVector
+    // The inverse `Compounder.stage2For` is used whenever targets are given;
+    // it falls back to a windowed brute force for non-canonical topologies.
+    private val useStage2For = targets.nonEmpty && !singleStage && topology.legacyMode.isDefined
 
-    // 0 = materialising stage candidates; 1 = pairing/emitting.
+    // 0 = materialising stage-1 candidates; 1 = stage-2 candidates; 2 = pairing/emitting.
     private var phase: Int = 0
-    private var iIdx: Int  = 0  // outer (stage-1) index in stagesBuf
-    private var jIdx: Int  = 0  // inner (stage-2) index — full cross-product
+    private var iIdx: Int  = 0  // outer (stage-1) index in buf1
+    private var jIdx: Int  = 0  // inner (stage-2) index in buf2 — full cross-product
     private var tIdx: Int  = 0  // current target index — useStage2For path
     private var s2Iter: Iterator[GearSet] = Iterator.empty
 
@@ -53,29 +56,37 @@ object SearchSteps:
       if done then Iterator.empty.next()
       else phase match
         case 0 =>
-          if stagesIter.hasNext then
-            stagesBuf += stagesIter.next()
+          if iter1.hasNext then
+            buf1 += iter1.next()
             None
           else
-            phase = 1
-            // If there are zero stage-1 candidates we're already done.
-            if stagesBuf.isEmpty then done = true
+            phase = if samePool || singleStage || useStage2For then 2 else 1
+            if buf1.isEmpty then done = true
             None
         case 1 =>
-          val n = stagesBuf.length
+          if iter2.hasNext then
+            buf2 += iter2.next()
+            None
+          else
+            phase = 2
+            if buf2.isEmpty then done = true
+            None
+        case 2 =>
+          val n  = buf1.length
+          val n2 = buf2.length
           if singleStage then
             if iIdx >= n then { done = true; None }
             else
-              val r = Compounder.single(cfg, stagesBuf(iIdx))
+              val r = Compounder.single(cfg, buf1(iIdx))
               iIdx += 1
               r
           else if useStage2For then
             if iIdx >= n then { done = true; None }
             else if s2Iter.hasNext then
               val s2 = s2Iter.next()
-              Compounder.compound(cfg, stagesBuf(iIdx), s2)
+              Compounder.compound(cfg, buf1(iIdx), s2)
             else if tIdx < targets.length then
-              s2Iter = Compounder.stage2For(targets(tIdx).value, stagesBuf(iIdx), cfg)
+              s2Iter = Compounder.stage2For(targets(tIdx).value, buf1(iIdx), cfg)
               tIdx += 1
               None
             else
@@ -85,15 +96,15 @@ object SearchSteps:
           else
             // Full cross-product. One pair per step.
             if iIdx >= n then { done = true; None }
-            else if jIdx >= n then
+            else if jIdx >= n2 then
               jIdx = 0
               iIdx += 1
               if iIdx >= n then done = true
               None
             else
               val r =
-                if iIdx == jIdx then None
-                else Compounder.compound(cfg, stagesBuf(iIdx), stagesBuf(jIdx))
+                if samePool && iIdx == jIdx then None
+                else Compounder.compound(cfg, buf1(iIdx), buf2(jIdx))
               jIdx += 1
               r
         case _ =>

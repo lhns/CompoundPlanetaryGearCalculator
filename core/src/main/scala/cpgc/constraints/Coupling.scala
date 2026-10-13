@@ -9,26 +9,18 @@ package cpgc.constraints
   *
   * The forward solver emits one linear-system row per coupling:
   *
-  *  - `PlanetStack` — stage-1 and stage-2 planets share a single physical
-  *    pinion. The closure is the planet-coupling row derived from both stages'
-  *    mesh equations (the only coupling whose row isn't a plain `ω_a − ω_b`).
-  *  - every other case — welds two central-body shafts: closure row
-  *    `ω_a − ω_b = 0` for the body pair returned by `bodyPair`.
+  *  - `PlanetStack`: stage-1 and stage-2 planets are one physical pinion,
+  *    row `ωP1 − ωP2 = 0`.
+  *  - every other case welds two central-body shafts: row `ω_a − ω_b = 0` for
+  *    the body pair returned by `bodyPair`.
   *
   * ## Physical realisability
   *
-  * `PlanetStack` is the special case among the 10 welds: **kinematically** it
-  * encodes `ω_P1 = ω_P2` and is independent of the carrier coupling, but
-  * **physically** a single stacked pinion can't simultaneously sit at two
-  * different orbital positions, so it implicitly *requires* `CarrierToCarrier`
-  * as its partner. The 8 pairs `{PlanetStack, X≠CarrierToCarrier}` are
-  * kinematically distinct compounds in the math but **not buildable machines**.
-  *
-  * The model leaves these pairs constructible (the verification harness uses
-  * them to exercise the solver), but the UI rejects them: the `PlanetStack`
-  * option in each coupling dropdown is `disabled` unless the other dropdown
-  * holds `CarrierToCarrier`. See `docs/verification/correctness-strategy.md`
-  * Edge-Case Catalogue #19.
+  * A single stacked pinion can't sit at two different orbital positions, so
+  * `PlanetStack` requires `CarrierToCarrier` as its partner. `Topology`
+  * enforces this at construction (ADR 0015 §4): the eight kinematic chimeras
+  * `{PlanetStack, X != CarrierToCarrier}` can no longer be built. See
+  * `docs/verification/correctness-strategy.md` Edge-Case Catalogue #19.
   */
 enum Coupling:
   case PlanetStack       // P1 ≡ P2 (stacked planet pinions)
@@ -51,10 +43,6 @@ object Coupling:
   /** Default *second* coupling — the classic stacked-planet closure, matching
     * the four pre-existing legacy `Mode`s. */
   val defaultSecond: Coupling = PlanetStack
-
-  /** Legacy alias retained for any caller still referencing the pre-split
-    * single-coupling default. */
-  val default: Coupling = PlanetStack
 
   /** The two welded bodies, for the central-shaft welds. `PlanetStack` returns
     * `None` — its solver row is the special planet-coupling equation, not a

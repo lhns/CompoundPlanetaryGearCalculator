@@ -1,8 +1,8 @@
 package cpgc.verify
 
 import cpgc.Calculator
-import cpgc.constraints.{SearchConfig, TeethBounds}
-import cpgc.domain.{GearSet, Mode, Teeth}
+import cpgc.constraints.{SearchConfig, TeethBounds, Topology}
+import cpgc.domain.{GearSet, Teeth}
 import cpgc.physics.PlanetSpacing
 import munit.FunSuite
 
@@ -11,9 +11,17 @@ import scala.io.Source
 /** Differential test against fixtures generated from the author's reference
   * Python program (see tools/reference/README.md). JVM-only: reads classpath files.
   *
-  * Both sides are restricted to the intersection of the two planet-fit predicates
-  * (reference: atan; ours: chord sin) and of the two module conventions (strict
-  * `>` in the reference, `>=` in ours), then compared keyed by (s1,p1,s2,p2).
+  * Mapping (ADR 0015/0016): Standard -> standardCompound, NSS/NSSFIX ->
+  * nssCompound, and the reference's CDCP -> the CDCP with **both suns absent**
+  * (`sunlessCdcpCompound`; the reference has no suns).
+  *
+  * Our module formula differs from the reference's (`m1 = OD/(R1+2)`), so we
+  * run with ringWall 0, minModule 0 and planetClearance 0 and post-filter both
+  * sides with the reference's module rule computed here (`m1 = OD/(R1+2) >
+  * MinModule`, `m2 = m1·(S1+P1)/(S2+P2) > MinModule`). Both sides are also
+  * restricted to the intersection of the two planet-fit predicates (reference:
+  * atan; ours: chord sin). Teeth sets and ratios are then compared keyed by
+  * (s1,p1,s2,p2); the module values themselves are not compared.
   */
 class ReferenceDifferentialSpec extends FunSuite:
 
@@ -51,32 +59,50 @@ class ReferenceDifferentialSpec extends FunSuite:
         c(6).toDouble, c(7).toInt, c(8).toInt, c(9).toInt)
     }
 
-  private def mode(f: Fixture): Mode = f.mode match
-    case "Standard"        => Mode.Standard
-    case "NSS" | "NSSFIX"  => Mode.NSS
-    case "CDCP"            => Mode.CDCP
+  private def topology(f: Fixture): Topology = f.mode match
+    case "Standard"        => Topology.standardCompound
+    case "NSS" | "NSSFIX"  => Topology.nssCompound
+    case "CDCP"            => Topology.sunlessCdcpCompound
 
   /** Translate the reference's settings (exclusive range upper bounds, strict ring
-    * bounds, CDCP overrides) to our inclusive bounds. */
+    * bounds, CDCP overrides) to our inclusive bounds. Module, wall and clearance
+    * are neutralised (see class doc); the module rule is applied in `run`. */
   private def config(f: Fixture): SearchConfig =
     val cdcp = f.mode == "CDCP"
     SearchConfig(
-      mode            = mode(f),
+      topology        = topology(f),
       sunTeeth        = TeethBounds(if cdcp then 2 else f.minTeeth, f.maxSun - 1),
       planetTeeth     = TeethBounds(f.minTeeth, f.maxTeeth - 1),
       ringTeeth       = TeethBounds(f.minRing + 1, f.maxRing - 1),
       planets         = TeethBounds(f.n, f.n),
-      minModule       = f.minModule,
+      minModule       = 0.0,
       firstStageOD    = f.od,
-      sunPlanetFactor = if cdcp then 100000.0 else f.spf
+      sunPlanetFactor = if cdcp then 100000.0 else f.spf,
+      ringWall        = 0.0,
+      planetClearance = 0.0
     )
+
+  /** The reference's module rule: `m1 = OD/(R1+2)`, `m2 = m1·(S1+P1)/(S2+P2)`, both strictly above MinModule. */
+  private def refModuleOk(f: Fixture, r: Row): Boolean =
+    val m1 = f.od / (r.r1 + 2.0)
+    val m2 = m1 * (r.s1 + r.p1).toDouble / (r.s2 + r.p2).toDouble
+    m1 > f.minModule && m2 > f.minModule
+
+  /** The reference still bounds *every* stage's sun by its sun range and
+    * sun/planet factor, also where our model has no sun (the virtual sun of a
+    * sun-less stage; ADR 0015 §6 drops these limits for us). */
+  private def refSunsOk(f: Fixture, r: Row): Boolean =
+    val cdcp = f.mode == "CDCP"
+    def ok(s: Int, p: Int) =
+      s >= (if cdcp then 2 else f.minTeeth) && s <= f.maxSun - 1 && p < (if cdcp then 100000.0 else f.spf) * s
+    ok(r.s1, r.p1) && ok(r.s2, r.p2)
 
   /** Reference fit predicate (note its truncated 2*pi constant). */
   private def fitAtan(s: Int, p: Int, n: Int): Boolean =
     p + 2.0 < math.atan(6.28319 / n / 2.0) * ((p + s) / 2.0) * 2.0
 
   private def fitSin(s: Int, p: Int, n: Int): Boolean =
-    PlanetSpacing.planetsFitWithoutOverlap(GearSet(Teeth(s), Teeth(p), n))
+    PlanetSpacing.planetsFitWithoutOverlap(GearSet(Teeth(s), Teeth(p), n), 0.0)
 
   private def close(a: Double, b: Double): Boolean =
     math.abs(a - b) <= 1e-9 * math.max(1.0, math.max(math.abs(a), math.abs(b)))
@@ -90,10 +116,9 @@ class ReferenceDifferentialSpec extends FunSuite:
         d.stage1.set.planet.toInt, d.stage1.set.ring.toInt, s2.module.value,
         s2.set.sun.toInt, s2.set.planet.toInt, s2.set.ring.toInt)
     }.toVector
-    val refKept  = ref.filter(r => fitSin(r.s1, r.p1, f.n) && fitSin(r.s2, r.p2, f.n))
+    val refKept  = ref.filter(r => fitSin(r.s1, r.p1, f.n) && fitSin(r.s2, r.p2, f.n) && refModuleOk(f, r))
     val oursKept = ours.filter(r =>
-      fitAtan(r.s1, r.p1, f.n) && fitAtan(r.s2, r.p2, f.n) &&
-        r.m1 > f.minModule && r.m2 > f.minModule)
+      fitAtan(r.s1, r.p1, f.n) && fitAtan(r.s2, r.p2, f.n) && refModuleOk(f, r) && refSunsOk(f, r))
     val refMap  = refKept.map(r => r.key -> r).toMap
     val oursMap = oursKept.map(r => r.key -> r).toMap
     val missing = refKept.filterNot(r => oursMap.contains(r.key))
@@ -101,9 +126,7 @@ class ReferenceDifferentialSpec extends FunSuite:
     val mism = refKept.flatMap { r =>
       oursMap.get(r.key).flatMap { o =>
         val bad =
-          (if close(r.ratio, o.ratio) then "" else s"ratio ${r.ratio} vs ${o.ratio}; ") +
-            (if close(r.m1, o.m1) then "" else s"m1 ${r.m1} vs ${o.m1}; ") +
-            (if close(r.m2, o.m2) then "" else s"m2 ${r.m2} vs ${o.m2}; ")
+          if close(r.ratio, o.ratio) then "" else s"ratio ${r.ratio} vs ${o.ratio}; "
         if bad.isEmpty then None else Some((r, o, bad))
       }
     }
@@ -144,7 +167,7 @@ class ReferenceDifferentialSpec extends FunSuite:
     val name = f.file
     val nm = s"$name: no missing designs"
     val ne = s"$name: no extra designs"
-    val nv = s"$name: ratio and modules agree"
+    val nv = s"$name: ratios agree"
     def sample(rows: Vector[Row]) = rows.take(5).map(_.key).mkString(", ")
     if expectFail(f, "missing") then
       test((nm + " (known disagreement)").fail) {
@@ -173,20 +196,12 @@ class ReferenceDifferentialSpec extends FunSuite:
     assert(readRef(f).exists(r => (r.s1 + r.r1) % f.n != 0))
   }
 
-  test("CDCP with default sun min (8) and factor (3) loses designs vs the reference's forced min 2 / factor 1e5") {
-    var anyLoss = false
+  test("sun-less CDCP ignores the sun-teeth range and the sun/planet factor (ADR 0015 §2, §6)") {
     fixtures.filter(_.mode == "CDCP").foreach { f =>
       val forced = config(f)
       val dflt   = forced.copy(sunTeeth = TeethBounds(8, f.maxSun - 1), sunPlanetFactor = 3.0)
-      def count(c: SearchConfig) = Calculator.search(c).count { d =>
-        val a = d.stage1.set; val b = d.stage2.get.set
-        fitAtan(a.sun.toInt, a.planet.toInt, f.n) && fitAtan(b.sun.toInt, b.planet.toInt, f.n) &&
-          d.stage1.module.value > f.minModule && d.stage2.get.module.value > f.minModule
-      }
-      val (all, kept) = (count(forced), count(dflt))
-      println(f"CDCP default-settings loss ${f.file}%-14s forced=$all%6d default=$kept%6d lost=${all - kept}%6d")
-      assert(kept <= all)
-      anyLoss ||= kept < all
+      def keys(c: SearchConfig) = Calculator.search(c).map(d =>
+        (d.stage1.set.planet.toInt, d.stage1.set.ring.toInt, d.stage2.get.set.planet.toInt, d.stage2.get.set.ring.toInt)).toSet
+      assertEquals(keys(dflt), keys(forced), f.file)
     }
-    assert(anyLoss)
   }

@@ -64,17 +64,71 @@ class TopologySpec extends FunSuite:
     }
   }
 
-  test("constructor rejects Absent on bodies other than S2") {
+  test("constructor rejects Absent on carriers and rings (only suns may be Absent)") {
+    for b <- Seq(Body.C2, Body.R2) do
+      intercept[IllegalArgumentException] {
+        Topology(2, Map(
+          Body.S1 -> BodyRole.Input,
+          Body.C1 -> BodyRole.Output,
+          Body.R1 -> BodyRole.Fixed,
+          Body.S2 -> BodyRole.Free,
+          Body.C2 -> BodyRole.Free,
+          Body.R2 -> BodyRole.Free
+        ).updated(b, BodyRole.Absent))
+      }
+  }
+
+  test("S1 may be Absent when it is not pinned and no coupling welds it") {
+    val t = Topology(2, Map(
+      Body.S1 -> BodyRole.Absent,
+      Body.C1 -> BodyRole.Input,
+      Body.R1 -> BodyRole.Fixed,
+      Body.S2 -> BodyRole.Free,
+      Body.C2 -> BodyRole.Free,
+      Body.R2 -> BodyRole.Output
+    ))
+    assert(!t.s1Present && t.s2Present)
+    assertEquals(t.meshCount, 3)
+  }
+
+  test("a coupling may not weld an Absent body") {
+    val roles = Topology.standardCompound.roles
+      .updated(Body.S1, BodyRole.Free).updated(Body.C1, BodyRole.Input).updated(Body.R1, BodyRole.Fixed)
+      .updated(Body.S1, BodyRole.Absent)
     intercept[IllegalArgumentException] {
-      Topology(2, Map(
-        Body.S1 -> BodyRole.Absent,
-        Body.C1 -> BodyRole.Input,
-        Body.R1 -> BodyRole.Fixed,
-        Body.S2 -> BodyRole.Output,
-        Body.C2 -> BodyRole.Free,
-        Body.R2 -> BodyRole.Free
-      ))
+      Topology(2, roles, Coupling.CarrierToCarrier, Coupling.SunToSun)
     }
+  }
+
+  test("PlanetStack requires CarrierToCarrier as the other coupling (ADR 0015 §4)") {
+    val roles = Topology.standardCompound.roles
+    for other <- Coupling.values.filterNot(c => c == Coupling.CarrierToCarrier || c == Coupling.PlanetStack) do
+      intercept[IllegalArgumentException](Topology(2, roles, Coupling.PlanetStack, other))
+      intercept[IllegalArgumentException](Topology(2, roles, other, Coupling.PlanetStack))
+    // Either order is fine with the shared carrier.
+    assert(Topology(2, roles, Coupling.PlanetStack, Coupling.CarrierToCarrier).stacked)
+    assert(Topology(2, roles, Coupling.CarrierToCarrier, Coupling.PlanetStack).stacked)
+  }
+
+  test("stacked iff either coupling is PlanetStack") {
+    assert(Topology.standardCompound.stacked && Topology.cdcpCompound.stacked && Topology.nssCompound.stacked)
+    assert(!Topology.singleStage.stacked)
+    assert(!Topology(2, Topology.standardCompound.roles, Coupling.CarrierToCarrier, Coupling.RingToSun).stacked)
+  }
+
+  test("withAbsentSuns removes unpinned suns and reports illegal requests as Left") {
+    assertEquals(Topology.withAbsentSuns(Topology.cdcpCompound, true, true), Right(Topology.sunlessCdcpCompound))
+    assertEquals(Topology.withAbsentSuns(Topology.standardCompound, false, true), Right(Topology.nssCompound))
+    assert(Topology.withAbsentSuns(Topology.standardCompound, true, false).isLeft) // S1 is the Input
+    assert(Topology.withAbsentSuns(Topology.singleStage, false, true).isLeft)
+    assert(Topology.withAbsentSuns(Topology.singleStage, true, false).isLeft)       // only 2 bodies left for 3 roles
+  }
+
+  test("sun-less topologies count one mesh per sun-less stage") {
+    assertEquals(Topology.standardCompound.meshCount, 4)
+    assertEquals(Topology.nssCompound.meshCount, 3)
+    assertEquals(Topology.sunlessCdcpCompound.meshCount, 2)
+    assertEquals(Topology.singleStage.meshCount, 2)
   }
 
   test("constructor rejects single-stage topology with S2 or R2 roles") {
@@ -99,11 +153,11 @@ class TopologySpec extends FunSuite:
     }
   }
 
-  test("Body.present matches each (stages, s2Present) combination") {
-    assertEquals(Body.present(1, s2Present = true),  Set(Body.S1, Body.C1, Body.R1))
-    assertEquals(Body.present(1, s2Present = false), Set(Body.S1, Body.C1, Body.R1))
-    assertEquals(Body.present(2, s2Present = true),  Set(Body.S1, Body.C1, Body.R1, Body.S2, Body.C2, Body.R2))
-    assertEquals(Body.present(2, s2Present = false), Set(Body.S1, Body.C1, Body.R1, Body.R2))
+  test("Body.present removes the absent bodies from the stage count's body set") {
+    assertEquals(Body.present(1, Set.empty),  Set(Body.S1, Body.C1, Body.R1))
+    assertEquals(Body.present(2, Set.empty),  Set(Body.S1, Body.C1, Body.R1, Body.S2, Body.C2, Body.R2))
+    assertEquals(Body.present(2, Set(Body.S2)), Set(Body.S1, Body.C1, Body.R1, Body.C2, Body.R2))
+    assertEquals(Topology.nssCompound.presentBodies, Set(Body.S1, Body.C1, Body.R1, Body.C2, Body.R2))
   }
 
   test("legacyMode returns the canonical legacy Mode for the four legacy tuples") {
@@ -131,15 +185,11 @@ class TopologySpec extends FunSuite:
     assertEquals(t.freeBodies, Set(Body.C1, Body.S2, Body.C2))
   }
 
-  test("s2Present is true for legacy modes that include S2 and false for NSS") {
+  test("s1Present / s2Present") {
     assert( Topology.standardCompound.s2Present)
     assert( Topology.cdcpCompound.s2Present)
     assert(!Topology.nssCompound.s2Present)
-    assert( Topology.singleStage.s2Present) // s2 isn't part of the body set anyway
-  }
-
-  test("secondSunPresent alias agrees with s2Present") {
-    for t <- Seq(Topology.standardCompound, Topology.cdcpCompound,
-                 Topology.nssCompound, Topology.singleStage) do
-      assertEquals(t.secondSunPresent, t.s2Present)
+    assert(!Topology.singleStage.s2Present) // there is no stage 2
+    assert( Topology.nssCompound.s1Present)
+    assert(!Topology.sunlessCdcpCompound.s1Present && !Topology.sunlessCdcpCompound.s2Present)
   }

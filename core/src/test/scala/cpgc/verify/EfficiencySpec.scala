@@ -1,71 +1,49 @@
 package cpgc.verify
 
-import cpgc.constraints.Coupling
-import cpgc.domain.{GearSet, Mode, Teeth}
+import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
 import cpgc.physics.Efficiency
 import munit.FunSuite
-import scala.util.Random
 
-/** Property + golden coverage for `Efficiency.overall` — previously a tier-D
-  * (no coverage) component. The efficiency model is a coarse mesh-count
-  * estimate (each mesh ≈ 0.985), so the tests pin its *structural* properties
-  * and snapshot its exact values rather than claiming dyno-grade accuracy.
+/** Golden and structural coverage for `Efficiency.overall(topology)` (ADR 0015
+  * §7): 0.985 per mesh, 2 meshes per stage with a sun, 1 per sun-less stage.
+  * The model is a coarse mesh-count estimate, so the tests pin its structure
+  * and exact values rather than claiming dyno-grade accuracy.
   */
 class EfficiencySpec extends FunSuite:
 
-  private val s1 = GearSet(Teeth(24), Teeth(12), 3)
-  private val s2 = GearSet(Teeth(20), Teeth(16), 3)
+  private val Mesh = 0.985
 
-  test("efficiency is always in (0, 1] for every mode and coupling") {
-    val rng = new Random(7L)
-    for _ <- 1 to 500 do
-      val a = GearSet(Teeth(rng.between(8, 60)), Teeth(rng.between(8, 30)), rng.between(3, 6))
-      val b = GearSet(Teeth(rng.between(8, 60)), Teeth(rng.between(8, 30)), rng.between(3, 6))
-      for
-        mode <- Mode.values
-        c    <- Coupling.values
-      do
-        val e = Efficiency.overall(a, Some(b), mode, c)
-        assert(e > 0.0 && e <= 1.0, s"efficiency $e out of (0,1] for mode=$mode coupling=$c")
+  private val sunlessStage1 = Topology(2, Map(
+    Body.S1 -> BodyRole.Absent, Body.C1 -> BodyRole.Input, Body.R1 -> BodyRole.Fixed,
+    Body.S2 -> BodyRole.Free, Body.C2 -> BodyRole.Free, Body.R2 -> BodyRole.Output))
+
+  test("golden: efficiency per canonical topology") {
+    assertEqualsDouble(Efficiency.overall(Topology.singleStage),         math.pow(Mesh, 2), 1e-12)
+    assertEqualsDouble(Efficiency.overall(Topology.standardCompound),    math.pow(Mesh, 4), 1e-12)
+    assertEqualsDouble(Efficiency.overall(Topology.cdcpCompound),        math.pow(Mesh, 4), 1e-12)
+    assertEqualsDouble(Efficiency.overall(Topology.nssCompound),         math.pow(Mesh, 3), 1e-12)
+    assertEqualsDouble(Efficiency.overall(sunlessStage1),                math.pow(Mesh, 3), 1e-12)
+    assertEqualsDouble(Efficiency.overall(Topology.sunlessCdcpCompound), math.pow(Mesh, 2), 1e-12)
   }
 
-  test("single-stage efficiency exceeds compound efficiency (fewer meshes)") {
-    val single   = Efficiency.overall(s1, None, Mode.SingleStage, Coupling.PlanetStack)
-    val compound = Efficiency.overall(s1, Some(s2), Mode.Standard, Coupling.PlanetStack)
-    assert(single > compound, s"single $single should beat compound $compound")
+  test("coupling choice does not change the mesh count (suns present)") {
+    val roles = Topology.standardCompound.roles
+    for c <- Coupling.values.filterNot(c => c == Coupling.PlanetStack || c == Coupling.CarrierToCarrier) do
+      assertEqualsDouble(Efficiency.overall(Topology(2, roles, Coupling.CarrierToCarrier, c)), math.pow(Mesh, 4), 1e-12, s"$c")
   }
 
-  test("NSS compound is more efficient than Standard (one fewer mesh)") {
-    // NSS drops stage 2's sun-planet mesh.
-    val nss      = Efficiency.overall(s1, Some(s2), Mode.NSS, Coupling.PlanetStack)
-    val standard = Efficiency.overall(s1, Some(s2), Mode.Standard, Coupling.PlanetStack)
-    assert(nss > standard, s"NSS $nss should beat Standard $standard")
+  test("B2: an NSS-like novel topology (S2 absent) gets the 3-mesh efficiency, not Standard's 4") {
+    val t = Topology(2, Map(
+      Body.S1 -> BodyRole.Input, Body.R2 -> BodyRole.Output, Body.C1 -> BodyRole.Fixed,
+      Body.R1 -> BodyRole.Free, Body.C2 -> BodyRole.Free, Body.S2 -> BodyRole.Absent))
+    assertEqualsDouble(Efficiency.overall(t), math.pow(Mesh, 3), 1e-12)
   }
 
-  test("golden: exact efficiency values per coupling on a canonical gear pair") {
-    // MeshEff = 0.985. Standard compound = 0.985^4 (2 meshes per stage).
-    assertEqualsDouble(
-      Efficiency.overall(s1, Some(s2), Mode.Standard, Coupling.PlanetStack),
-      math.pow(0.985, 4), 1e-12
-    )
-    // Single stage = 0.985^2.
-    assertEqualsDouble(
-      Efficiency.overall(s1, None, Mode.SingleStage, Coupling.PlanetStack),
-      math.pow(0.985, 2), 1e-12
-    )
-    // Novel couplings: each stage contributes a full 2-mesh path → 0.985^4.
-    for c <- Seq(Coupling.RingToSun, Coupling.SunToRing, Coupling.RingToRing, Coupling.SunToSun) do
-      assertEqualsDouble(
-        Efficiency.overall(s1, Some(s2), Mode.Standard, c),
-        math.pow(0.985, 4), 1e-12, s"coupling $c"
-      )
-  }
-
-  // Catalogue #13 fix landed: NSS stage 1 is a full planetary (2 meshes), only
-  // stage 2 drops its sun mesh (1 mesh) → 0.985^3, not the old 0.985^2.
-  test("NSS efficiency is 0.985^3 — stage 1 keeps both meshes (catalogue #13 fixed)") {
-    assertEqualsDouble(
-      Efficiency.overall(s1, Some(s2), Mode.NSS, Coupling.PlanetStack),
-      math.pow(0.985, 3), 1e-12
-    )
+  test("efficiency is in (0, 1] and a sun-less stage never lowers it") {
+    for t <- Seq(Topology.singleStage, Topology.standardCompound, Topology.cdcpCompound,
+                 Topology.nssCompound, Topology.sunlessCdcpCompound, sunlessStage1) do
+      val e = Efficiency.overall(t)
+      assert(e > 0.0 && e <= 1.0, s"$e for $t")
+    assert(Efficiency.overall(Topology.nssCompound) > Efficiency.overall(Topology.standardCompound))
+    assert(Efficiency.overall(Topology.singleStage) > Efficiency.overall(Topology.standardCompound))
   }

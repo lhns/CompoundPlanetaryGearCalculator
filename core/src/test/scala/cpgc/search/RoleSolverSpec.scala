@@ -1,7 +1,7 @@
 package cpgc.search
 
 import cpgc.constraints.{Body, BodyRole, Coupling, Topology}
-import cpgc.domain.{GearSet, Teeth}
+import cpgc.domain.{GearSet, Ratio, Teeth}
 import munit.FunSuite
 import scala.util.Random
 
@@ -20,12 +20,12 @@ class RoleSolverSpec extends FunSuite:
   // vs an independent superposition-method solver, >13 000 combinations —
   // subsumes them with stronger, code-independent coverage.
 
-  test("forward solver matches Compounder.singleStageRatio for Mode.SingleStage — 100 random gear sets") {
+  test("forward solver matches 1 / GearSet.sunCarrierRatio for the single stage — 100 random gear sets") {
     val rng = new Random(Seed + 3)
     val topology = Topology.singleStage
     for _ <- 1 to 100 do
       val s = randomSunPlanetRing(rng)
-      val expected = Compounder.singleStageRatio(s)
+      val expected = Ratio(1.0 / s.sunCarrierRatio)
       val actual   = RoleSolver.ratio(topology, s, None).getOrElse(fail(s"None for single $s"))
       assert(math.abs(expected.value - actual.value) < 1e-9,
         s"single stage $s: expected ${expected.value}, got ${actual.value}")

@@ -100,19 +100,18 @@ class UiLogicSpec extends FunSuite:
     val b = bounds(40, 10)
     assertEquals((b.min, b.max), (10, 40))
 
-  test("buildConfig copies form values and derives mode from the topology"):
+  test("buildConfig copies form values and the topology"):
     val c = buildConfig(base.copy(target = "100", sunPlanetFactor = "2"), 77)
-    assertEquals(c.mode, Mode.CDCP)
-    assertEquals(c.topology, Some(Topology.cdcpCompound))
+    assertEquals(c.topology, Topology.cdcpCompound)
     assertEquals((c.sunTeeth.min, c.sunTeeth.max), (10, 12))
     assertEquals(c.sunPlanetFactor, 2.0)
     assertEquals(c.topPerTarget, 77)
     assertEquals(c.targets.map(_.value), Seq(100.0))
 
-  test("buildConfig: blank / junk sunPlanetFactor means unlimited, novel topology maps to Standard mode"):
+  test("buildConfig: blank / junk sunPlanetFactor means unlimited, a novel topology is passed through"):
     assertEquals(buildConfig(base, 1).sunPlanetFactor, 1e9)
     assertEquals(buildConfig(base.copy(sunPlanetFactor = "x"), 1).sunPlanetFactor, 1e9)
-    assertEquals(buildConfig(base.copy(topology = ravigneauxTopology), 1).mode, Mode.Standard)
+    assertEquals(buildConfig(base.copy(topology = ravigneauxTopology), 1).topology, ravigneauxTopology)
 
   test("U2 typed teeth minimum below 2 must not throw while building the config".fail):
     // observed: IllegalArgumentException "min teeth must be >= 2, got 1"
@@ -166,8 +165,7 @@ class UiLogicSpec extends FunSuite:
   // ── U4: OD / min module ────────────────────────────────────────────────────
 
   for (name, od) <- Seq("zero" -> 0.0, "negative" -> -5.0, "NaN" -> Double.NaN, "Infinity" -> Double.PositiveInfinity) do
-    test(s"U4 OD $name must not throw anywhere in the search".fail):
-      // observed: IllegalArgumentException "Module must be positive and finite" from Compounder.matchModules
+    test(s"U4 OD $name must not throw anywhere in the search"):
       val r = Try(buildAndSearch(base.copy(od = od)))
       assert(r.isSuccess, s"threw ${r.failed.toOption}")
 
@@ -183,7 +181,7 @@ class UiLogicSpec extends FunSuite:
       assertEquals(topologyPreset(presetTopology(p)), p)
 
   test("an edited preset topology is Custom"):
-    assertEquals(topologyPreset(Topology.standardCompound.copy(firstCoupling = Coupling.RingToSun)), GearboxPreset.Custom)
+    assertEquals(topologyPreset(Topology.standardCompound.copy(secondCoupling = Coupling.SunToSun)), GearboxPreset.Custom)
 
   // ── Stage count ────────────────────────────────────────────────────────────
 
@@ -207,8 +205,7 @@ class UiLogicSpec extends FunSuite:
       assertEquals((r.firstCoupling, r.secondCoupling), (t.firstCoupling, t.secondCoupling))
       assertEquals(r.roles.keySet, t.roles.keySet)
 
-  test("N1 assignRole on an Absent body must not throw".fail):
-    // observed: IllegalArgumentException (Absent handed to the displaced holder)
+  test("N1 assignRole on an Absent body must not throw"):
     assert(Try(assignRole(Topology.nssCompound, Body.S2, BodyRole.Input)).isSuccess)
 
   test("N1 assignRole on a body that does not exist must not throw".fail):
@@ -217,24 +214,20 @@ class UiLogicSpec extends FunSuite:
 
   // ── U1: setS2Present ───────────────────────────────────────────────────────
 
-  test("U1 Standard -> NSS toggle yields a valid NSS topology and keeps pins/couplings".fail):
-    // observed: IllegalArgumentException "extra body assignment" (C2 role is kept)
+  test("U1 Standard -> NSS toggle yields a valid NSS topology and keeps pins/couplings"):
     val t = setS2Present(Topology.standardCompound, false)
     assert(!t.s2Present)
     assertEquals(pins(t), pins(Topology.standardCompound))
     assertEquals((t.firstCoupling, t.secondCoupling), (Coupling.CarrierToCarrier, Coupling.PlanetStack))
 
-  test("U1 NSS -> Standard toggle yields a valid compound".fail):
-    // observed: IllegalArgumentException "missing role for present body" (C2 not added)
+  test("U1 NSS -> Standard toggle yields a valid compound"):
     assertEquals(setS2Present(Topology.nssCompound, true), Topology.standardCompound)
 
-  test("U1 Standard -> NSS -> Standard round-trips".fail):
-    // observed: IllegalArgumentException on the first toggle
+  test("U1 Standard -> NSS -> Standard round-trips"):
     val t = Topology.standardCompound
     assertEquals(setS2Present(setS2Present(t, false), true), t)
 
-  test("U1 CDCP -> NSS keeps the carrier input".fail):
-    // observed: IllegalArgumentException "extra body assignment"
+  test("U1 CDCP -> NSS keeps the carrier input"):
     val t = setS2Present(Topology.cdcpCompound, false)
     assert(!t.s2Present)
     assertEquals(t.input, Body.C1)
@@ -245,8 +238,7 @@ class UiLogicSpec extends FunSuite:
     assert(!t.s2Present)
     assertEquals((t.input, t.fixed), (Body.S1, Body.R1))
 
-  test("U1 toggling S2 off when S2 holds a pin role yields a valid topology".fail):
-    // observed: IllegalArgumentException "extra body assignment"
+  test("U1 toggling S2 off when S2 holds a pin role yields a valid topology"):
     val withS2Input = assignRole(Topology.standardCompound, Body.S2, BodyRole.Input)
     val t = setS2Present(withS2Input, false)
     assert(!t.s2Present)
@@ -309,18 +301,16 @@ class UiLogicSpec extends FunSuite:
   private val n4 = GearSet(Teeth(30), Teeth(12), 4)
 
   private def cfgFor(t: Topology) =
-    SearchConfig(mode = Mode.Standard, topology = Some(t), minModule = 0.01, firstStageOD = 150.0)
+    SearchConfig(topology = t, minModule = 0.01, firstStageOD = 150.0)
 
   test("stacked planets with different planet counts are rejected (PlanetStack in slot 2)"):
     assertEquals(Compounder.compound(cfgFor(Topology.standardCompound), n3, n4), None)
 
-  test("U7 stacked planets with different planet counts are rejected (PlanetStack in slot 1)".fail):
-    // observed: Some(design) with N1=3, N2=4; the mismatch guard only looks at secondCoupling
+  test("U7 stacked planets with different planet counts are rejected (PlanetStack in slot 1)"):
     val t = Topology.standardCompound.copy(firstCoupling = Coupling.PlanetStack, secondCoupling = Coupling.CarrierToCarrier)
     assertEquals(Compounder.compound(cfgFor(t), n3, n4), None)
 
-  test("U7 stacked-pinion module matching applies with PlanetStack in slot 1".fail):
-    // observed: m2 == m1 == 3.571 instead of 2.551 (module matching also keys on secondCoupling only)
+  test("U7 stacked-pinion module matching applies with PlanetStack in slot 1"):
     val t = Topology.standardCompound.copy(firstCoupling = Coupling.PlanetStack, secondCoupling = Coupling.CarrierToCarrier)
     val s2 = GearSet(Teeth(30), Teeth(12), 3)
     val d = Compounder.compound(cfgFor(t), n3, s2)

@@ -27,16 +27,18 @@ object Pretty:
 
   private def row(d: CompoundDesign): Vector[String] =
     val s1 = d.stage1
+    // A sun-less stage shows "—" instead of its virtual sun.
+    def sunCell(s: Stage, present: Boolean): String = if present then s.set.sun.toInt.toString else "—"
     val (s2s, s2p, s2r, s2m) = d.stage2 match
-      case Some(s) => (s.set.sun.toInt.toString, s.set.planet.toInt.toString, s.set.ring.toInt.toString, fmt(s.module.value))
+      case Some(s) => (sunCell(s, d.topology.s2Present), s.set.planet.toInt.toString, s.set.ring.toInt.toString, fmt(s.module.value))
       case None    => ("-", "-", "-", "-")
     Vector(
-      d.mode.toString,
+      d.modeName,
       fmt(d.ratio.value),
       fmt(d.efficiency),
       s1.set.numPlanets.toString,
       if d.spacingOk then "ok" else "no",
-      s1.set.sun.toInt.toString,
+      sunCell(s1, d.topology.s1Present),
       s1.set.planet.toInt.toString,
       s1.set.ring.toInt.toString,
       fmt(s1.module.value),

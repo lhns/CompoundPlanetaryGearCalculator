@@ -23,7 +23,7 @@ class SearchStepsSpec extends FunSuite:
     ds.iterator.map(Scorer.canonicalKey).toSet
 
   private def baseConfig(mode: Mode): SearchConfig = SearchConfig(
-    mode        = mode,
+    topology    = Topology.fromMode(mode),
     sunTeeth    = TeethBounds(10, 20),
     planetTeeth = TeethBounds(10, 14),
     ringTeeth   = TeethBounds(40, 60),
@@ -73,8 +73,7 @@ class SearchStepsSpec extends FunSuite:
     )
     assume(novel.legacyMode.isEmpty, "test setup expects a non-legacy topology")
     val cfg = SearchConfig(
-      mode        = Mode.Standard,
-      topology    = Some(novel),
+      topology    = novel,
       sunTeeth    = TeethBounds(10, 18),
       planetTeeth = TeethBounds(10, 14),
       ringTeeth   = TeethBounds(40, 56),

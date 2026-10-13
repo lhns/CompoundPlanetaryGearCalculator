@@ -112,8 +112,7 @@ object UiLogic:
 
   def buildConfig(f: FormValues, topPerTarget: Int): SearchConfig =
     SearchConfig(
-      mode            = f.topology.legacyMode.getOrElse(Mode.Standard),
-      topology        = Some(f.topology),
+      topology        = f.topology,
       sunTeeth        = bounds(f.sunMin, f.sunMax),
       planetTeeth     = bounds(f.planetMin, f.planetMax),
       ringTeeth       = bounds(f.ringMin, f.ringMax),

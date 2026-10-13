@@ -9,28 +9,22 @@ import scala.util.Random
 
 /** Shared fixtures for the contract / completeness / cross-path specs.
   *
-  * `Case` = a named topology plus the way the product builds a `SearchConfig`
-  * for it: the web UI form (`mode = legacyMode.getOrElse(Standard)` +
-  * `topology = Some(t)`) or the plain CLI form (`SearchConfig(mode = m)`).
+  * `Case` = a named topology. `SearchConfig.topology` is the single source of
+  * truth (ADR 0015), so the CLI form (`Mode` alias) and the web form
+  * (explicit topology) both reduce to `base.copy(topology = t)`.
   */
 object ContractSupport:
 
-  final case class Case(name: String, topology: Topology, viaTopology: Boolean):
-    def config(base: SearchConfig): SearchConfig =
-      if viaTopology then
-        base.copy(mode = topology.legacyMode.getOrElse(Mode.Standard), topology = Some(topology))
-      else
-        base.copy(mode = topology.legacyMode.get, topology = None)
+  final case class Case(name: String, topology: Topology):
+    def config(base: SearchConfig): SearchConfig = base.copy(topology = topology)
 
   private def comp(
-      in: Body, out: Body, fix: Body, first: Coupling, second: Coupling, s2Absent: Boolean = false
+      in: Body, out: Body, fix: Body, first: Coupling, second: Coupling, absent: Set[Body] = Set.empty
   ): Topology =
-    val bodies =
-      if s2Absent then Set(Body.S1, Body.C1, Body.R1, Body.R2)
-      else Set(Body.S1, Body.C1, Body.R1, Body.S2, Body.C2, Body.R2)
-    val base = bodies.map(b => b -> BodyRole.Free).toMap
-    val roles = base + (in -> BodyRole.Input) + (out -> BodyRole.Output) + (fix -> BodyRole.Fixed) ++
-      (if s2Absent then Map(Body.S2 -> BodyRole.Absent) else Map.empty)
+    val pins = Map(in -> BodyRole.Input, out -> BodyRole.Output, fix -> BodyRole.Fixed)
+    val roles = Body.values.map { b =>
+      b -> (if absent.contains(b) then BodyRole.Absent else pins.getOrElse(b, BodyRole.Free))
+    }.toMap
     Topology(2, roles, first, second)
 
   private def single(in: Body, out: Body, fix: Body): Topology =
@@ -50,34 +44,36 @@ object ContractSupport:
 
   val novel: Vector[(String, Topology)] = Vector(
     "PS+CC std-roles"            -> comp(S1, R2, R1, PlanetStack, CarrierToCarrier),
-    "PS+RingToSun std-roles"     -> comp(S1, R2, R1, PlanetStack, RingToSun),
     "CC+RingToSun std-roles"     -> comp(S1, R2, R1, CarrierToCarrier, RingToSun),
     "SunToCarrier+RingToSun"     -> comp(S1, R2, R1, SunToCarrier, RingToSun),
     "CC+SunToRing std-roles"     -> comp(S1, R2, R1, CarrierToCarrier, SunToRing),
     "CC+RingToRing C1fixed"      -> comp(S1, R2, C1, CarrierToCarrier, RingToRing),
     "CC+SunToSun std-roles"      -> comp(S1, R2, R1, CarrierToCarrier, SunToSun),
-    "NSS-like (C1 fixed)"        -> comp(S1, R2, C1, CarrierToCarrier, PlanetStack, s2Absent = true),
+    "NSS-like (C1 fixed)"        -> comp(S1, R2, C1, CarrierToCarrier, PlanetStack, Set(S2)),
     "CDCP-like (S1 fixed)"       -> comp(C1, R2, S1, CarrierToCarrier, PlanetStack),
+    "CDCP sun-less (both)"       -> Topology.sunlessCdcpCompound,
+    "CDCP S1-absent"             -> comp(C1, R2, R1, CarrierToCarrier, PlanetStack, Set(S1)),
     "single S1->R1 C1fixed"      -> single(S1, R1, C1),
     "single C1->S1 R1fixed"      -> single(C1, S1, R1)
   )
 
   val cases: Vector[Case] =
-    legacy.map((n, t) => Case(s"$n[topology]", t, viaTopology = true)) ++
-      legacy.map((n, t) => Case(s"$n[mode-only]", t, viaTopology = false)) ++
-      novel.map((n, t) => Case(n, t, viaTopology = true))
+    (legacy.map((n, t) => Case(s"$n[topology]", t)) ++ novel.map((n, t) => Case(n, t)))
 
   // ── spec rules ────────────────────────────────────────────────────────────
 
   def stacked(t: Topology): Boolean =
     t.stages == 2 && (t.firstCoupling == PlanetStack || t.secondCoupling == PlanetStack)
 
-  /** The intended spacing rule (see task statement). */
+  /** The intended spacing rule (ADR 0015 §5): every stage whose sun is present
+    * needs `(S + R) % N == 0`; a sun-less stage has no condition. */
   def specSpacingOk(t: Topology, s1: GearSet, s2: Option[GearSet]): Boolean =
-    if t.stages == 1 then s1.evenSpacing
-    else if stacked(t) && t.input == C1 then true // CDCP relaxation
-    else if !t.s2Present then s1.evenSpacing       // NSS relaxation
-    else s1.evenSpacing && s2.forall(_.evenSpacing)
+    (!t.sunPresent(1) || s1.evenSpacing) && s2.forall(g => !t.sunPresent(2) || g.evenSpacing)
+
+  /** Intended first-stage module (ADR 0016), `None` when not positive finite. */
+  def specModule1(cfg: SearchConfig, s1: GearSet): Option[Double] =
+    val m = (cfg.firstStageOD - 2.0 * cfg.ringWall) / (s1.ring.toDouble + 2.5)
+    if m > 0.0 && m.isFinite then Some(m) else None
 
   // ── random configs ────────────────────────────────────────────────────────
 
@@ -112,8 +108,8 @@ object ContractSupport:
   def cfgSummary(c: SearchConfig): String =
     s"sun=${c.sunTeeth.min}..${c.sunTeeth.max} planet=${c.planetTeeth.min}..${c.planetTeeth.max} " +
       s"ring=${c.ringTeeth.min}..${c.ringTeeth.max} N=${c.planets.min}..${c.planets.max} " +
-      s"minMod=${c.minModule} OD=${c.firstStageOD} spf=${c.sunPlanetFactor} " +
-      s"targets=${c.targets.map(_.value)} mode=${c.mode} topo=${if c.topology.isDefined then "Some" else "None"}"
+      s"minMod=${c.minModule} OD=${c.firstStageOD} wall=${c.ringWall} clr=${c.planetClearance} spf=${c.sunPlanetFactor} " +
+      s"targets=${c.targets.map(_.value)}"
 
   type Key = (Int, Int, Int, Int, Int, Int, Int)
 
@@ -135,23 +131,25 @@ object ContractSupport:
   /** Every valid design per the intended rules, independent of `Compounder`.
     * Returns (s1, s2, ratio). Includes identical-stage pairs. */
   def referenceDesigns(cfg: SearchConfig): Vector[(GearSet, Option[GearSet], Double)] =
-    val t = cfg.effectiveTopology
-    val pool = Enumerator.gearSets(cfg).toVector
+    val t = cfg.topology
+    val pool1 = Enumerator.stage1Sets(cfg).toVector
     def modOk(m: Double) = m >= cfg.minModule
     if t.stages == 1 then
       for
-        a <- pool
+        a <- pool1
         if specSpacingOk(t, a, None)
-        if modOk(cfg.firstStageOD / (a.ring.toDouble + 2.0))
+        m1 <- specModule1(cfg, a).toVector
+        if modOk(m1)
         r <- RoleSolver.ratio(t, a, None).toVector
       yield (a, None, r.value)
     else
+      val pool2 = Enumerator.stage2Sets(cfg).toVector
       for
-        a <- pool
-        b <- pool
+        a <- pool1
+        b <- pool2
         if !stacked(t) || a.numPlanets == b.numPlanets
         if specSpacingOk(t, a, Some(b))
-        m1 = cfg.firstStageOD / (a.ring.toDouble + 2.0)
+        m1 <- specModule1(cfg, a).toVector
         m2 = if stacked(t) then m1 * (a.sun.toInt + a.planet.toInt).toDouble / (b.sun.toInt + b.planet.toInt) else m1
         if modOk(m1) && modOk(m2)
         r <- RoleSolver.ratio(t, a, Some(b)).toVector
@@ -159,4 +157,5 @@ object ContractSupport:
 
   def err(target: Double, ratio: Double): Double = math.abs(math.abs(target) - math.abs(ratio))
 
-  def planetsFit(s: GearSet): Boolean = PlanetSpacing.planetsFitWithoutOverlap(s)
+  def planetsFit(s: GearSet, cfg: SearchConfig): Boolean =
+    PlanetSpacing.planetsFitWithoutOverlap(s, cfg.planetClearance)

@@ -1,7 +1,7 @@
 package cpgc.render
 
 import cpgc.Calculator
-import cpgc.constraints.{SearchConfig, TeethBounds}
+import cpgc.constraints.{SearchConfig, TeethBounds, Topology}
 import cpgc.domain.Mode
 import cpgc.render.GearGeometry.*
 import munit.FunSuite
@@ -45,7 +45,7 @@ class GearGeometrySpec extends FunSuite:
     * with the per-planet `planetPhaseOffset`. */
   test("planetPhaseOffset yields f_s + f_p_inward = 0.5 for all planets") {
     val cfg = SearchConfig(
-      mode        = Mode.Standard,
+      topology        = Topology.fromMode(Mode.Standard),
       sunTeeth    = TeethBounds(10, 30),
       planetTeeth = TeethBounds(10, 20),
       ringTeeth   = TeethBounds(40, 80),
@@ -81,7 +81,7 @@ class GearGeometrySpec extends FunSuite:
     * with `ringPhaseOffset` applied to the ring rotation. */
   test("ringPhaseOffset yields f_r − f_p_outward = 0.5 for all planets") {
     val cfg = SearchConfig(
-      mode        = Mode.Standard,
+      topology        = Topology.fromMode(Mode.Standard),
       sunTeeth    = TeethBounds(10, 30),
       planetTeeth = TeethBounds(10, 20),
       ringTeeth   = TeethBounds(40, 80),
@@ -126,7 +126,7 @@ class GearGeometrySpec extends FunSuite:
     */
   test("sun↔planet polygons do not overlap at the radial contact") {
     val cfg = SearchConfig(
-      mode        = Mode.Standard,
+      topology        = Topology.fromMode(Mode.Standard),
       sunTeeth    = TeethBounds(10, 30),
       planetTeeth = TeethBounds(10, 20),
       ringTeeth   = TeethBounds(40, 80),
@@ -162,7 +162,7 @@ class GearGeometrySpec extends FunSuite:
   /** Same property for the planet↔ring internal contact. */
   test("planet↔ring polygons do not overlap at the radial contact") {
     val cfg = SearchConfig(
-      mode        = Mode.Standard,
+      topology        = Topology.fromMode(Mode.Standard),
       sunTeeth    = TeethBounds(10, 30),
       planetTeeth = TeethBounds(10, 20),
       ringTeeth   = TeethBounds(40, 80),
