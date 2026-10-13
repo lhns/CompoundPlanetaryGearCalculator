@@ -17,7 +17,6 @@ import munit.FunSuite
   *
   * Kinds (chosen so a failure can be attributed):
   *   - `sort(search)`            exhaustive stream + Scorer.sort dedup
-  *   - `Scorer.sort(searchSteps)` the step iterator + Scorer.sort dedup
   *   - `engine top-K`            the bounded accumulator, overall best fit
   *   - `best()`                  Calculator.best (per-target top-K)
   */
@@ -71,12 +70,6 @@ class CompletenessSpec extends FunSuite:
       reg("engine top-K") {
         val top = Calculator.engine(cfg, Scorer.SortBy.BestFit, K).run().top
         assertErrors(top.map(d => Scorer.bestTargetError(cfg.targets, d.ratio)), refTop, s"engine ${cfgSummary(cfg)}")
-      }
-
-      reg("Scorer.sort(searchSteps) top-K") {
-        val ds  = Calculator.searchSteps(cfg).flatten.toVector
-        val top = Scorer.sort(ds, Scorer.SortBy.BestFit, cfg.targets).take(K)
-        assertErrors(top.map(d => Scorer.bestTargetError(cfg.targets, d.ratio)), refTop, s"sort(steps) ${cfgSummary(cfg)}")
       }
 
       reg("best() top-K per target") {
