@@ -9,20 +9,11 @@ import munit.FunSuite
   *   - **stage-2 decoupled** — ratio doesn't depend on stage-2 gears
   *   - **stage-1 decoupled** — ratio doesn't depend on stage-1 gears
   *   - **trivial passthrough** — `|ratio − 1| < ε`
-  *
-  * Backed by the redundancy diagnostic that surfaced two specific classes of
-  * such pairs with the Standard role tuple. See
-  * `docs/verification/correctness-strategy.md` catalogue #10.
   */
 class DecoupledStageSpec extends FunSuite:
 
   // Even-spaced, physically buildable gear sets with **matching planet count**
-  // so PlanetStack-family compounds don't fall through the V3 N1==N2 guard
-  // (Edge-Case Catalogue #6).
-  // s1: S=20, P=15, R=50, N=3 — (20+50)%3 = 1 — fails Standard but we'll use
-  //     pairs whose spacing fits.
-  // s2: S=24, P=12, R=48, N=3 — (24+48)%3 = 0 ✓
-  // For the cases where Standard requires both stages even-spaced, use s1' below.
+  // so PlanetStack-family compounds pass the stacked N1 == N2 rule.
   private val s1: GearSet = GearSet(Teeth(24), Teeth(12), 3) // (24+48)%3 = 0 ✓
   private val s2: GearSet = GearSet(Teeth(20), Teeth(16), 3) // R=52, (20+52)%3 = 0 ✓
 

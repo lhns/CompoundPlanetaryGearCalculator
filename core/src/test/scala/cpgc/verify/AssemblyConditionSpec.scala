@@ -122,7 +122,7 @@ class AssemblyConditionSpec extends FunSuite:
       assert(AssemblyOracle.stacked(Seq(s1, s2), 2, Pinion.Individual), variant)
   }
 
-  test("SpacingExperimentSpec designs: A (Standard) assembles, B (NSS) does not") {
+  test("counterexamples: a Standard design assembles, an NSS design the old rule accepted does not") {
     val a1 = Stage.std(19, 17); val a2 = Stage.std(19, 14)
     assert(AssemblyOracle.stacked(Seq(a1, a2), 3, Pinion.Identical(g0)))
     val b1 = Stage.std(53, 11); val b2 = Stage.std(72, 14).withoutSun
