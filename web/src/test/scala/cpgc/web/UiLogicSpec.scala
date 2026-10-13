@@ -32,7 +32,7 @@ class UiLogicSpec extends FunSuite:
   /** Build the config (whatever the builder returns now or later: config or
     * `Right(config)`) and run the whole search over it. */
   private def buildAndSearch(f: FormValues): Unit =
-    buildConfig(f, 50).foreach(c => Calculator.searchSteps(c).foreach(_ => ()))
+    buildConfig(f, 50).foreach(c => Calculator.search(c).foreach(_ => ()))
 
   // ── parseDouble / urlParam / parseRange ────────────────────────────────────
 
@@ -114,7 +114,7 @@ class UiLogicSpec extends FunSuite:
     assertEquals(cfgOf(base).sunPlanetFactor, 1e9)
     assert(buildConfig(base.copy(sunPlanetFactor = "x"), 1).isLeft)
     assert(buildConfig(base.copy(sunPlanetFactor = "0"), 1).isLeft)
-    assertEquals(cfgOf(base.copy(topology = ravigneauxTopology)).topology, ravigneauxTopology)
+    assertEquals(cfgOf(base.copy(topology = Topology.ravigneaux)).topology, Topology.ravigneaux)
 
   test("buildConfig passes ring wall, clearance and phased pinions through"):
     val c = cfgOf(base.copy(ringWall = 3.0, clearance = 0.8, phasedPinions = true))
@@ -197,8 +197,8 @@ class UiLogicSpec extends FunSuite:
   test("setStageCount switches 1 <-> 2 and keeps a compound as is"):
     assertEquals(setStageCount(Topology.standardCompound, 1), Topology.singleStage)
     assertEquals(setStageCount(Topology.singleStage, 2), Topology.standardCompound)
-    assertEquals(setStageCount(ravigneauxTopology, 2), ravigneauxTopology)
-    assertEquals(setStageCount(ravigneauxTopology, 3), ravigneauxTopology)
+    assertEquals(setStageCount(Topology.ravigneaux, 2), Topology.ravigneaux)
+    assertEquals(setStageCount(Topology.ravigneaux, 3), Topology.ravigneaux)
 
   // ── assignRole ─────────────────────────────────────────────────────────────
 
@@ -243,11 +243,11 @@ class UiLogicSpec extends FunSuite:
 
   test("U1 a sun welded by a coupling cannot be removed: Left with a reason, topology unchanged"):
     // Ravigneaux welds C1 to S2, so S2 cannot be absent (the old expectation of a valid NSS was wrong).
-    val r = setSunPresent(ravigneauxTopology, 2, false)
+    val r = setSunPresent(Topology.ravigneaux, 2, false)
     assert(r.isLeft, r.toString)
     assert(r.left.exists(_.contains("Absent")), r.toString)
-    assertEquals(setS2Present(ravigneauxTopology, false), ravigneauxTopology)
-    assert(sunToggleDisabledReason(ravigneauxTopology, 2).isDefined)
+    assertEquals(setS2Present(Topology.ravigneaux, false), Topology.ravigneaux)
+    assert(sunToggleDisabledReason(Topology.ravigneaux, 2).isDefined)
 
   test("U1 toggling S2 off when C2 holds a pin role is valid and keeps the pins"):
     val t0 = assignRole(Topology.standardCompound, Body.C2, BodyRole.Output)
@@ -328,7 +328,7 @@ class UiLogicSpec extends FunSuite:
     assert(couplingOptionDisabled(std, CouplingSlot.First, Coupling.PlanetStack))
     assert(couplingOptionDisabled(std, CouplingSlot.Second, Coupling.CarrierToCarrier))
     assert(!couplingOptionDisabled(std, CouplingSlot.First, Coupling.CarrierToCarrier))
-    val rav = ravigneauxTopology // CarrierToSun / RingToRing
+    val rav = Topology.ravigneaux // CarrierToSun / RingToRing
     assert(couplingOptionDisabled(rav, CouplingSlot.First, Coupling.PlanetStack))
     assert(couplingOptionDisabled(rav, CouplingSlot.Second, Coupling.PlanetStack))
 
@@ -403,8 +403,8 @@ class UiLogicSpec extends FunSuite:
     initialForm("?sun=1-5&planets=3&od=0&target=100%3B53%2C12"),
     initialForm("?mode=cdcp-sunless&ringwall=3.5&clearance=0.25&phased=1&spfact=2"),
     base,
-    base.copy(topology = ravigneauxTopology, target = "100, 53.12", sunPlanetFactor = "1.5"),
-    base.copy(topology = simpsonTopology, ringWall = 0.0, clearance = 1.25, phasedPinions = true),
+    base.copy(topology = Topology.ravigneaux, target = "100, 53.12", sunPlanetFactor = "1.5"),
+    base.copy(topology = Topology.simpson, ringWall = 0.0, clearance = 1.25, phasedPinions = true),
     base.copy(topology = Topology.nssCompound.copy(firstCoupling = Coupling.CarrierToRing, secondCoupling = Coupling.CarrierToCarrier)),
     base.copy(topology = Topology.singleStage),
     base.copy(topology = setSunPresent(Topology.standardCompound, 1, false).toOption.get)
@@ -497,7 +497,7 @@ class UiLogicSpec extends FunSuite:
     for p <- selectablePresets do
       val t  = presetTopology(p)
       val c  = cfgOf(f.copy(topology = t), 1)
-      val ds = Calculator.searchSteps(c).flatten.take(25).toVector
+      val ds = Calculator.search(c).take(25).toVector
       assert(ds.nonEmpty, s"no designs for $p")
       for d <- ds do
         val (in, out) = Kinematics.io(d, Kinematics.at(d, 1.0))

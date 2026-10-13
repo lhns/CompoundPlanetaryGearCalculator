@@ -56,4 +56,4 @@ The earlier "design-space disjointness" framing has been retired — the two set
 
 ## Related notes
 
-- The earlier `SpacingExperimentSpec` numbers that appeared to show compound mesh-phase residuals failing for Standard designs were artefacts of misusing `GearGeometry.planetPhaseOffset` (a visual per-planet rotation offset, wrapped to the shortest arc) as if it were a planet's physical body rotation. That spec is retained as diagnostic-only with a header comment explaining the misinterpretation.
+- The earlier `SpacingExperimentSpec` numbers that appeared to show compound mesh-phase residuals failing for Standard designs were artefacts of misusing `GearGeometry.planetPhaseOffset` (a visual per-planet rotation offset, wrapped to the shortest arc) as if it were a planet's physical body rotation. That reading was wrong (ADR 0018), and the spec has since been deleted in favour of `AssemblyConditionSpec`.

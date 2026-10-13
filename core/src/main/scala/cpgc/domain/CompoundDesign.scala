@@ -10,8 +10,6 @@ final case class CompoundDesign(
     topology: Topology,
     ratio: Ratio,
     efficiency: Double,
-    spacingOk: Boolean,
-    profileShiftHint: Option[ProfileShift],
     validity: Validity = Validity.Ok
 ):
   /** "Standard" / "CDCP" / "NSS" / "SingleStage" for canonical topologies,

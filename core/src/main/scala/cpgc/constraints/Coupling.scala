@@ -19,8 +19,7 @@ package cpgc.constraints
   * A single stacked pinion can't sit at two different orbital positions, so
   * `PlanetStack` requires `CarrierToCarrier` as its partner. `Topology`
   * enforces this at construction (ADR 0015 §4): the eight kinematic chimeras
-  * `{PlanetStack, X != CarrierToCarrier}` can no longer be built. See
-  * `docs/verification/correctness-strategy.md` Edge-Case Catalogue #19.
+  * `{PlanetStack, X != CarrierToCarrier}` cannot be built.
   */
 enum Coupling:
   case PlanetStack       // P1 ≡ P2 (stacked planet pinions)
@@ -36,14 +35,6 @@ enum Coupling:
 
 object Coupling:
 
-  /** Default *first* coupling for compound topologies — the classic shared
-    * carrier. */
-  val defaultFirst: Coupling = CarrierToCarrier
-
-  /** Default *second* coupling — the classic stacked-planet closure, matching
-    * the four pre-existing legacy `Mode`s. */
-  val defaultSecond: Coupling = PlanetStack
-
   /** The two welded bodies, for the central-shaft welds. `PlanetStack` returns
     * `None` — its solver row is the special planet-coupling equation, not a
     * plain `ω_a − ω_b = 0`. */
@@ -58,21 +49,6 @@ object Coupling:
     case CarrierToRing    => Some((Body.C1, Body.R2))
     case SunToCarrier     => Some((Body.S1, Body.C2))
     case RingToCarrier    => Some((Body.R1, Body.C2))
-
-  /** True when a single physical pinion bridges both stages (so planet count
-    * and module must match). Only `PlanetStack`. */
-  def stacksPlanets(c: Coupling): Boolean = c == PlanetStack
-
-  /** Assembly feasibility of a gear pair `(s1, s2)` for this coupling, reduced to
-    * each stage's own even-spacing rule `(S + R) % N == 0`: central-shaft welds
-    * don't intermesh, so the install phase is a free parameter. This is exact
-    * for single stages and for compounds without stacked planets (verified
-    * against the tooth-phase oracle in `AssemblyConditionSpec`). It is **not**
-    * the full rule for `PlanetStack`: identical stacked pinions also need the
-    * cross term of ADR 0018, which `Compounder.satisfiesSpacing` enforces.
-    * Sun-less stages are exempt from the even-spacing rule (ADR 0015 §5). */
-  def assemblable(c: Coupling, s1Even: Boolean, s2Even: Boolean): Boolean =
-    s1Even && s2Even
 
   /** Display label for the coupling picker UI. */
   def label(c: Coupling): String = c match

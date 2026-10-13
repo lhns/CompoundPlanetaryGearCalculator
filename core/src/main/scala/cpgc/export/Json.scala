@@ -11,7 +11,7 @@ object Json:
   def renderOne(d: CompoundDesign): String =
     val stage2 = d.stage2.fold("null")(stageJson(_, d.topology.s2Present))
     s"""{"mode":"${d.modeName}","ratio":${fmt(d.ratio.value)},""" +
-      s""""efficiency":${fmt(d.efficiency)},"spacingOk":${d.spacingOk},""" +
+      s""""efficiency":${fmt(d.efficiency)},""" +
       s""""planets":${d.stage1.set.numPlanets},""" +
       s""""stage1":${stageJson(d.stage1, d.topology.s1Present)},"stage2":$stage2,""" +
       s""""topology":${topologyJson(d)}}"""

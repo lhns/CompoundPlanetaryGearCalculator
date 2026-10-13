@@ -21,7 +21,6 @@ class InputRobustnessSpec extends FunSuite:
   private def exhaust(cfg: SearchConfig): Try[Int] = Try {
     Calculator.search(cfg).size +
       Calculator.top(cfg, cpgc.search.Scorer.SortBy.Efficiency, 5).size +
-      Calculator.searchSteps(cfg).flatten.size +
       Calculator.best(cfg).values.map(_.size).sum
   }
 

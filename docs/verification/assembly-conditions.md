@@ -24,7 +24,7 @@ When both suns are present and both stage sums hold, it is equivalent to
 **Before ADR 0018, production (ADR 0012 / 0015) was right for single stages and non-stacked compounds, and wrong for every
 stacked compound with identical pinions. `Compounder.satisfiesSpacing` now enforces the cross term (unless `phasedPinions`).** It omitted the cross term, so it accepted designs that could not be
 built. The smallest counterexample was `Tp1 = Tp2 = 6`, `Tr1 = 18`, `Tr2 = 19`, `N = 2` (rings differ by 1).
-The NSS search winner from `SpacingExperimentSpec`, design B (`S1 53 / P1 11 / R1 75`,
+A former diagnostic's NSS search winner, design B (`S1 53 / P1 11 / R1 75`,
 `P2 14 / R2 100`, `N = 4`), does not assemble: `11·100 − 14·75 = 50`, and `50 % 4 = 2`. Design A (Standard) does assemble.
 
 ## Assumptions
@@ -78,8 +78,8 @@ That makes the two conditions independent (rank 2), so any weld offsets can be a
 **Why ADR 0012's NSS argument fails.** Stage 1 makes the planets congruent in the carrier frame only up to
 their own rotations. `x_k` differs from planet to planet by multiples of `1/Tp1` plus a stage-1 term. Half 2
 turns by the same angle, which is `Tp2/Tp1` of its own pitches, and that need not match ring 2's pattern at
-`θ_k`. The residuals at planets 1..N−1 in `SpacingExperimentSpec` were dismissed as artefacts, but they can be
-real (design B).
+`θ_k`. The residuals at planets 1..N−1 in the former `SpacingExperimentSpec` diagnostic were dismissed as artefacts, but
+they were real (design B).
 
 ## Oracle
 
@@ -129,8 +129,7 @@ N 2..6) matched `(Ts+Tr) % N == 0`, which is `GearSet.evenSpacing`. Non-stacked:
    `g_k` and label which slot it goes in. Otherwise the user gets a design they cannot assemble.
 4. **Supersede the spacing table in ADR 0012 / ADR 0015 §5** with a new ADR. The "Open" question in
    ADR 0015 is resolved: a joint condition exists for any stacked pinion, not only the sun-less one.
-   Correct the `SpacingExperimentSpec` header and the `Coupling.assemblable` doc, and pin the change in the
-   bug register.
+   Done: ADR 0018. The diagnostic spec and `Coupling.assemblable` were removed; `AssemblyConditionSpec` replaces them.
 5. **Planet clearance.** Clearance does not interact with phase: it depends only on centre distance, N and
    tip diameters. Check it per stacked half, at that half's own axial level. Unequal spacing could rescue
    designs that fail on phase, but it changes the clearance check and the balance. Keep equal spacing as the

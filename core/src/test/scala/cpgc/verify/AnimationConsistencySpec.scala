@@ -1,6 +1,6 @@
 package cpgc.verify
 
-import cpgc.constraints.{Body, BodyRole, Coupling, SearchConfig, TeethBounds, Topology}
+import cpgc.constraints.{Body, Coupling, SearchConfig, TeethBounds, Topology}
 import cpgc.domain.CompoundDesign
 import cpgc.kinematics.{BodyAngles, Kinematics}
 import cpgc.search.{Compounder, Enumerator, RoleSolver}
@@ -11,17 +11,6 @@ import munit.FunSuite
   * reported ratio and with the forward solver. */
 class AnimationConsistencySpec extends FunSuite:
 
-  // Mirrors the web presets (cpgc.web.UiLogic); the core module cannot see web.
-  private def compound(
-      in: Body, out: Body, fixed: Body, c1: Coupling, c2: Coupling
-  ): Topology =
-    val pins = Map(in -> BodyRole.Input, out -> BodyRole.Output, fixed -> BodyRole.Fixed)
-    Topology(2, Body.values.map(b => b -> pins.getOrElse(b, BodyRole.Free)).toMap, c1, c2)
-
-  private val ringToSun  = compound(Body.S1, Body.R2, Body.R1, Coupling.CarrierToCarrier, Coupling.RingToSun)
-  private val ravigneaux = compound(Body.S1, Body.C2, Body.R1, Coupling.CarrierToSun, Coupling.RingToRing)
-  private val simpson    = compound(Body.S1, Body.C2, Body.R1, Coupling.CarrierToRing, Coupling.SunToSun)
-
   private val legacy: Seq[(String, Topology)] = Seq(
     "single"   -> Topology.singleStage,
     "standard" -> Topology.standardCompound,
@@ -29,10 +18,10 @@ class AnimationConsistencySpec extends FunSuite:
     "nss"      -> Topology.nssCompound
   )
   private val novel: Seq[(String, Topology)] = Seq(
-    "ring-to-sun"      -> ringToSun,
+    "ring-to-sun"      -> Topology.ringToSunCascade,
     "sunless-cdcp"     -> Topology.sunlessCdcpCompound,
-    "ravigneaux"       -> ravigneaux,
-    "simpson"          -> simpson
+    "ravigneaux"       -> Topology.ravigneaux,
+    "simpson"          -> Topology.simpson
   )
 
   /** Designs built from valid (enumerated, spacing-checked) gear sets. */
@@ -98,18 +87,6 @@ class AnimationConsistencySpec extends FunSuite:
       assertEqualsDouble(in,  angle(b, t.input),  1e-9, s"io input for $name")
       assertEqualsDouble(out, angle(b, t.output), 1e-9, s"io output for $name")
 
-  for (name, t) <- legacy do
+  for (name, t) <- legacy ++ novel do
     test(s"$name: Kinematics.io returns the topology's input/output bodies"):
       ioMatchesTopology(name, t)
-
-  test("ring-to-sun: Kinematics.io returns the topology's input/output bodies (same roles as Standard)"):
-    ioMatchesTopology("ring-to-sun", ringToSun)
-
-  test("ravigneaux: Kinematics.io returns the topology's input/output bodies"):
-    ioMatchesTopology("ravigneaux", ravigneaux)
-
-  test("simpson: Kinematics.io returns the topology's input/output bodies"):
-    ioMatchesTopology("simpson", simpson)
-
-  test("sun-less CDCP: Kinematics.io returns the topology's input/output bodies"):
-    ioMatchesTopology("sunless-cdcp", Topology.sunlessCdcpCompound)

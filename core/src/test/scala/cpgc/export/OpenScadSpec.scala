@@ -116,7 +116,7 @@ class OpenScadSpec extends FunSuite:
     assert(big.contains("bore=4.000000") && big.contains("bore=3.000000"))
     // m = 0.5, planet 8: root diameter 0.5·5.5 = 2.75 -> default 3 mm bore would eat the gear
     val tiny = CompoundDesign(
-      Stage(GearSet(Teeth(10), Teeth(8), 3), Module(0.5)), None, Topology.singleStage, Ratio(3.0), 0.97, true, None)
+      Stage(GearSet(Teeth(10), Teeth(8), 3), Module(0.5)), None, Topology.singleStage, Ratio(3.0), 0.97)
     val t = OpenScad.emit(tiny)
     val bores = """bore=(\d+\.\d+)""".r.findAllMatchIn(t).map(_.group(1).toDouble).toVector
     val sunRoot = 0.5 * (10 - 2.5); val planetRoot = 0.5 * (8 - 2.5)
@@ -137,7 +137,7 @@ class OpenScadSpec extends FunSuite:
     do
       val d = CompoundDesign(
         Stage(GearSet(Teeth(ts1), Teeth(tp1), n), Module(1.5)),
-        Some(Stage(GearSet(Teeth(ts2), Teeth(tp2), n), Module(1.5))), top, Ratio(5.0), 0.9, true, None)
+        Some(Stage(GearSet(Teeth(ts2), Teeth(tp2), n), Module(1.5))), top, Ratio(5.0), 0.9)
       val ok1 = !top.s1Present || (ts1 + d.stage1.set.ring.toInt) % n == 0
       val ok2 = !top.s2Present || (ts2 + d.stage2.get.set.ring.toInt) % n == 0
       if ok1 && ok2 && cross(d) % n == 0 then
@@ -163,7 +163,7 @@ class OpenScadSpec extends FunSuite:
       val s1 = Stage(GearSet(Teeth(ts1), Teeth(tp1), n1), Module(1.5))
       val s2 = Stage(GearSet(Teeth(ts2), Teeth(tp2), n2), Module(1.5))
       if s1.set.evenSpacing && s2.set.evenSpacing then
-        val d   = CompoundDesign(s1, Some(s2), nonStacked, Ratio(5.0), 0.9, true, None)
+        val d   = CompoundDesign(s1, Some(s2), nonStacked, Ratio(5.0), 0.9)
         val out = OpenScad.emit(d)
         val errs = meshErrors(s1, n1, parseStage(out, "stage1"), true) ++
           meshErrors(s2, n2, parseStage(out, "stage2"), true)

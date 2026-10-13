@@ -1,5 +1,7 @@
 package cpgc.`export`
 
+import cpgc.Calculator
+import cpgc.constraints.{SearchConfig, TeethBounds, Topology}
 import cpgc.domain.CompoundDesign
 import munit.FunSuite
 
@@ -12,8 +14,8 @@ class ExportSpec extends FunSuite:
   // -- P1: sun-less stages never show a sun -----------------------------------
 
   test("P1 CSV: sun cells are empty exactly for absent suns") {
-    // columns: mode,ratio,efficiency,planets,spacingOk,sun1,planet1,ring1,module1,sun2,...
-    def suns(d: CompoundDesign) = (csvCells(d)(5), csvCells(d)(9))
+    // columns: mode,ratio,efficiency,planets,sun1,planet1,ring1,module1,sun2,...
+    def suns(d: CompoundDesign) = (csvCells(d)(4), csvCells(d)(8))
     assertEquals(suns(standard), ("25", "26"))
     assertEquals(suns(nss), ("25", ""))
     assertEquals(suns(s1Absent), ("", "26"))
@@ -31,8 +33,8 @@ class ExportSpec extends FunSuite:
   test("P1 Pretty: absent suns show a dash, never the virtual tooth count") {
     val t = Pretty.table(Seq(sunless)).linesIterator.toVector
     val cells = t(3).split('│').map(_.trim).filter(_.nonEmpty)
-    assertEquals(cells(5), "—")
-    assertEquals(cells(9), "—")
+    assertEquals(cells(4), "—")
+    assertEquals(cells(8), "—")
   }
 
   test("P1 OpenSCAD: no sun gear for sun-less stages") {
@@ -51,15 +53,15 @@ class ExportSpec extends FunSuite:
 
   test("CSV: original columns stay put, topology columns are appended") {
     val head = Csv.render(Seq(standard)).linesIterator.next()
-    assert(head.startsWith("mode,ratio,efficiency,planets,spacingOk,sun1,planet1,ring1,module1,sun2,planet2,ring2,module2,"))
-    assertEquals(head.split(',').toVector.drop(13),
+    assert(head.startsWith("mode,ratio,efficiency,planets,sun1,planet1,ring1,module1,sun2,planet2,ring2,module2,"))
+    assertEquals(head.split(',').toVector.drop(12),
       Vector("input", "output", "fixed", "firstCoupling", "secondCoupling", "absentSuns"))
-    assertEquals(csvCells(standard).drop(13), Vector("S1", "R2", "R1", "CarrierToCarrier", "PlanetStack", ""))
+    assertEquals(csvCells(standard).drop(12), Vector("S1", "R2", "R1", "CarrierToCarrier", "PlanetStack", ""))
     assertEquals(csvCells(nss).last, "S2")
     assertEquals(csvCells(sunless).last, "S1;S2")
     assertEquals(csvCells(s1Absent).last, "S1")
-    assertEquals(csvCells(single).drop(13), Vector("S1", "C1", "R1", "", "", ""))
-    for (_, d) <- all do assertEquals(csvCells(d).length, 19)
+    assertEquals(csvCells(single).drop(12), Vector("S1", "C1", "R1", "", "", ""))
+    for (_, d) <- all do assertEquals(csvCells(d).length, 18)
   }
 
   test("JSON: topology object") {
@@ -95,11 +97,11 @@ class ExportSpec extends FunSuite:
   }
 
   private val goldenPretty: String =
-    """┌─────────────────┬────────┬───────┬───┬─────────┬────┬────┬────┬───────┬────┬────┬────┬───────┬─────────────────────────────────────────────────┬────────┐
-      |│ Mode            │ Ratio  │ Eff   │ N │ Spacing │ S1 │ P1 │ R1 │ M1    │ S2 │ P2 │ R2 │ M2    │ Layout                                          │ No sun │
-      |├─────────────────┼────────┼───────┼───┼─────────┼────┼────┼────┼───────┼────┼────┼────┼───────┼─────────────────────────────────────────────────┼────────┤
-      |│ CDCP (sun-less) │ 12.500 │ 0.900 │ 3 │ ok      │ —  │ 11 │ 47 │ 2.000 │ —  │ 10 │ 46 │ 2.000 │ C1→R2 | R1 fixed | CarrierToCarrier+PlanetStack │ S1;S2  │
-      |└─────────────────┴────────┴───────┴───┴─────────┴────┴────┴────┴───────┴────┴────┴────┴───────┴─────────────────────────────────────────────────┴────────┘""".stripMargin
+    """┌─────────────────┬────────┬───────┬───┬────┬────┬────┬───────┬────┬────┬────┬───────┬─────────────────────────────────────────────────┬────────┐
+      |│ Mode            │ Ratio  │ Eff   │ N │ S1 │ P1 │ R1 │ M1    │ S2 │ P2 │ R2 │ M2    │ Layout                                          │ No sun │
+      |├─────────────────┼────────┼───────┼───┼────┼────┼────┼───────┼────┼────┼────┼───────┼─────────────────────────────────────────────────┼────────┤
+      |│ CDCP (sun-less) │ 12.500 │ 0.900 │ 3 │ —  │ 11 │ 47 │ 2.000 │ —  │ 10 │ 46 │ 2.000 │ C1→R2 | R1 fixed | CarrierToCarrier+PlanetStack │ S1;S2  │
+      |└─────────────────┴────────┴───────┴───┴────┴────┴────┴───────┴────┴────┴────┴───────┴─────────────────────────────────────────────────┴────────┘""".stripMargin
 
   // -- P6: non-finite numbers -------------------------------------------------
 
@@ -126,4 +128,11 @@ class ExportSpec extends FunSuite:
     val inf = standard.copy(efficiency = Double.PositiveInfinity)
     assertEquals(csvCells(inf)(2), "Inf")
     assert(Json.renderOne(inf).contains(""""efficiency":null"""))
+  }
+
+  test("determinism: the same config renders identical CSV") {
+    val cfg = SearchConfig(
+      topology = Topology.singleStage, sunTeeth = TeethBounds(10, 20), planetTeeth = TeethBounds(10, 14),
+      ringTeeth = TeethBounds(40, 60), planets = TeethBounds(3, 3))
+    assertEquals(Csv.render(Calculator.search(cfg).take(20)), Csv.render(Calculator.search(cfg).take(20)))
   }

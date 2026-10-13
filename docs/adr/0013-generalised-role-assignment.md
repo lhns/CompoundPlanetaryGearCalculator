@@ -1,7 +1,7 @@
 # ADR 0013 — Generalised role-assignment topology
 
 ## Status
-Accepted. Written *before* phase D1 lands; updated in place as phases D2-D6 ship.
+Accepted and implemented (phases D1-D6). The inverse-solver part (D5) is superseded by [ADR 0017](0017-single-search-engine.md) and `Mode` by [ADR 0015](0015-topology-single-source-of-truth.md).
 
 ## Context
 
