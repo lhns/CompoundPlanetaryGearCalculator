@@ -22,6 +22,10 @@ import scala.io.Source
   * restricted to the intersection of the two planet-fit predicates (reference:
   * atan; ours: chord sin). Teeth sets and ratios are then compared keyed by
   * (s1,p1,s2,p2); the module values themselves are not compared.
+  *
+  * The reference has no identical-pinion cross term (ADR 0018), so the
+  * comparison runs with `phasedPinions = true`; a separate test counts how many
+  * reference designs the default (identical pinions) rule removes.
   */
 class ReferenceDifferentialSpec extends FunSuite:
 
@@ -67,7 +71,7 @@ class ReferenceDifferentialSpec extends FunSuite:
   /** Translate the reference's settings (exclusive range upper bounds, strict ring
     * bounds, CDCP overrides) to our inclusive bounds. Module, wall and clearance
     * are neutralised (see class doc); the module rule is applied in `run`. */
-  private def config(f: Fixture): SearchConfig =
+  private def config(f: Fixture, phased: Boolean = true): SearchConfig =
     val cdcp = f.mode == "CDCP"
     SearchConfig(
       topology        = topology(f),
@@ -79,7 +83,8 @@ class ReferenceDifferentialSpec extends FunSuite:
       firstStageOD    = f.od,
       sunPlanetFactor = if cdcp then 100000.0 else f.spf,
       ringWall        = 0.0,
-      planetClearance = 0.0
+      planetClearance = 0.0,
+      phasedPinions   = phased
     )
 
   /** The reference's module rule: `m1 = OD/(R1+2)`, `m2 = m1·(S1+P1)/(S2+P2)`, both strictly above MinModule. */
@@ -107,8 +112,8 @@ class ReferenceDifferentialSpec extends FunSuite:
   private def close(a: Double, b: Double): Boolean =
     math.abs(a - b) <= 1e-9 * math.max(1.0, math.max(math.abs(a), math.abs(b)))
 
-  private def run(f: Fixture): Result =
-    val cfg  = config(f)
+  private def run(f: Fixture, phased: Boolean = true): Result =
+    val cfg  = config(f, phased)
     val ref  = readRef(f)
     val ours = Calculator.search(cfg).map { d =>
       val s2 = d.stage2.get
@@ -194,6 +199,21 @@ class ReferenceDifferentialSpec extends FunSuite:
     // Stale global Planet1 (= 0) in the reference means stage-1 spacing is never really tested.
     val f = fixtures.find(_.file == "nss_A_N4.csv").get
     assert(readRef(f).exists(r => (r.s1 + r.r1) % f.n != 0))
+  }
+
+  test("identical-pinion rule (ADR 0018): reference designs removed by the cross term") {
+    println(f"${"fixture"}%-20s ${"refKept"}%7s ${"removed"}%8s ${"share"}%7s")
+    var totalRemoved = 0
+    fixtures.filter(_.mode != "NSS").foreach { f =>
+      val r = run(f, phased = false)
+      // every design the identical-pinion rule keeps is a reference design ...
+      assertEquals(r.extra.size, 0, s"${f.file}: ${r.extra.take(3).map(_.key)}")
+      // ... and none of the reference's removed designs satisfies the cross term
+      val removed = r.missing.size
+      println(f"${f.file}%-20s ${r.refKept}%7d $removed%8d ${100.0 * removed / math.max(1, r.refKept)}%6.1f%%")
+      totalRemoved += removed
+    }
+    assert(totalRemoved > 0, "expected the cross term to remove some reference designs")
   }
 
   test("sun-less CDCP ignores the sun-teeth range and the sun/planet factor (ADR 0015 §2, §6)") {
