@@ -21,6 +21,12 @@ final class OrbitState(private var home: OrbitState.Home):
     distV = h.distance * ratio
     tx = h.target._1 + off._1; ty = h.target._2 + off._2; tz = h.target._3 + off._3
 
+  /** Adopt a new home and snap to it, keeping only the orbit angles (a new design: re-fit the view). */
+  def refit(h: Home): Unit =
+    home = h
+    tx = h.target._1; ty = h.target._2; tz = h.target._3
+    distV = h.distance
+
   def reset(): Unit =
     yawV = DefaultYaw; pitchV = DefaultPitch; distV = home.distance
     tx = home.target._1; ty = home.target._2; tz = home.target._3
