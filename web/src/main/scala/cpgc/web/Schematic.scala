@@ -252,35 +252,25 @@ object Schematic:
       )
     )
 
-  /** Legend: role markers bottom-left; one swatch per coupling in a strip under the footer. */
+  /** Legend in the bottom-left corner: the roles, then one entry per coupling, all in one style (as in
+    * the 3D view). The long coupling labels come last, so they fall below the centred footer. */
   private def legend(d: CompoundDesign): Vector[SvgElement] =
-    val baseX = -212.0
-    val baseY = 128.0 // stacked rows in the bottom-left corner, clear of the title and footer
-    def row(i: Int, color: String, name: String): Vector[SvgElement] =
-      val y = baseY + 12.0 * i
+    val baseX = -210.0
+    val baseY = 128.0
+    val roles = Palette.RoleLegend.map((tone, name) => (Palette.css(tone), name))
+    val couplings =
+      if d.stage2.isEmpty then Vector.empty
+      else Vector(1 -> d.topology.firstCoupling, 2 -> d.topology.secondCoupling)
+        .map((slot, c) => (couplingColor(slot), SchematicLayout.couplingLegendLabel(c)))
+    (roles ++ couplings).zipWithIndex.flatMap { case ((color, name), i) =>
+      val y = baseY + 13.0 * i
       Vector(
-        s.circle(s.cx := f"$baseX%.2f", s.cy := f"$y%.2f", s.r := "3", s.fill := color),
-        s.text(s.x := f"${baseX + 7}%.2f", s.y := f"${y + 3}%.2f",
-               s.fill := SubText, s.fontSize := "9",
+        s.circle(s.cx := f"$baseX%.2f", s.cy := f"$y%.2f", s.r := "4", s.fill := color),
+        s.text(s.x := f"${baseX + 9}%.2f", s.y := f"${y + 3.5}%.2f",
+               s.fill := SubText, s.fontSize := "10",
                s.fontFamily := "ui-monospace, monospace", name)
       )
-    val roleRows = Palette.RoleLegend.zipWithIndex.flatMap { case ((tone, name), i) => row(i, Palette.css(tone), name) }
-    val couplingRows =
-      if d.stage2.isEmpty then Vector.empty
-      else
-        Vector(1 -> d.topology.firstCoupling, 2 -> d.topology.secondCoupling).zipWithIndex.flatMap {
-          case ((slot, c), i) =>
-            val y = 166.0 + 14.0 * i
-            Vector(
-              s.rect(s.x := f"${baseX - 3}%.2f", s.y := f"${y - 4}%.2f", s.width := "9", s.height := "9",
-                     s.fill := couplingColor(slot), s.rx := "1.5"),
-              s.text(s.x := f"${baseX + 11}%.2f", s.y := f"${y + 4}%.2f",
-                     s.fill := TextColor, s.fontSize := "10.5",
-                     s.fontFamily := "ui-monospace, monospace",
-                     SchematicLayout.couplingLegendLabel(c))
-            )
-        }
-    roleRows ++ couplingRows
+    }
 
   private def footerInfo(d: CompoundDesign): Vector[SvgElement] =
     val module1 = f"m₁=${d.stage1.module.value}%.2f mm"
