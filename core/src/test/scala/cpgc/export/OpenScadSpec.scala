@@ -88,9 +88,26 @@ class OpenScadSpec extends FunSuite:
     assert(scad.contains("coaxial"))
   }
 
-  test("golden: ring rim width follows the wall (ADR 0016)") {
-    val wall = cpgc.constraints.SearchConfig.DefaultRingWall
-    assert(st1.text.contains(s"rim_width=${Numeric.fixed(wall, 6)}"), st1.text)
+  /** gears.scad `ring_gear` outer diameter for a given rim_width (formula copied from the library). */
+  private def libraryRingOd(m: Double, tr: Int, rim: Double): Double =
+    val da = m * tr + (m + m / 6) * (if m < 1 then 2.2 else 2.0)
+    2 * (da / 2 + rim)
+
+  private def rims(out: String): Vector[Double] =
+    """rim_width=(\d+\.\d+)""".r.findAllMatchIn(out).map(_.group(1).toDouble).toVector
+
+  test("ring rim width makes the library ring OD equal Stage.ringOuterDiameter (ADR 0016)") {
+    val small = CompoundDesign(
+      Stage(GearSet(Teeth(10), Teeth(8), 3), Module(0.5)), None, Topology.singleStage, Ratio(3.0), 0.97)
+    for d <- Seq(standard, single, small) do
+      val stages = d.stage1 +: d.stage2.toVector
+      val r = rims(OpenScad.emit(d))
+      assertEquals(r.size, stages.size)
+      stages.zip(r).foreach((s, rim) =>
+        assert(rim > 0.0)
+        assertEqualsDouble(libraryRingOd(s.module.value, s.set.ring.toInt, rim), s.ringOuterDiameter, 1e-5))
+    // m = 2, wall 2: rim = wall + m/12
+    assert(st1.text.contains("rim_width=2.166667"), st1.text)
   }
 
   test("ring OD equals Stage.ringOuterDiameter") {
@@ -212,4 +229,29 @@ class OpenScadSpec extends FunSuite:
     assert(OpenScad.emit(nss).contains("absent suns: S2"))
     assert(OpenScad.emit(sunless).contains("absent suns: S1, S2"))
     assert(scad.contains("Mode: Standard"))
+  }
+
+  // -- bundling gears.scad ----------------------------------------------------
+
+  test("bundle inlines the library in place of the use line, once, between markers") {
+    val lib = "// fake library\nmodule spur_gear() {}\nmodule ring_gear() {}\n"
+    val out = OpenScad.bundle(scad, lib)
+    assert(!out.contains("use <gears.scad>;"))
+    assertEquals(out.sliding("module spur_gear() {}".length).count(_ == "module spur_gear() {}"), 1)
+    val begin = out.indexOf("// ---- begin gears.scad: Dr Jörg Janssen, CC BY-NC-SA")
+    val end   = out.indexOf("// ---- end gears.scad ----")
+    assert(begin >= 0 && end > begin)
+    assert(out.substring(begin, end).contains(lib.stripSuffix("\n")))
+    // everything outside the inlined block is the original script
+    val useLine = scad.indexOf("use <gears.scad>;")
+    assertEquals(out.substring(0, begin), scad.substring(0, useLine))
+    assertEquals(out.substring(end + "// ---- end gears.scad ----".length), scad.substring(useLine + "use <gears.scad>;".length))
+  }
+
+  test("bundle rejects a script without a use line") {
+    intercept[IllegalArgumentException](OpenScad.bundle("stage1();\n", "x"))
+  }
+
+  test("header names the library and its licence") {
+    assert(scad.contains("Janssen") && scad.contains("CC BY-NC-SA") && scad.contains(OpenScad.LibraryHome))
   }

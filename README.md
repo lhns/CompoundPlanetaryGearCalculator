@@ -52,6 +52,7 @@ Useful flags:
 - `--min-module <mm/tooth>`, `--sun-planet-factor <x>` (max planet/sun teeth ratio)
 - `--top <k>` results (per target when targets are given)
 - `--csv out.csv` / `--json out.json` / `--scad design.scad` (OpenSCAD for the top design), `--no-table`
+  - the `.scad` calls [Dr Jörg Janssen's `gears.scad`](https://github.com/chrisspen/gears) (CC BY-NC-SA); save it next to the file or in OpenSCAD's libraries folder (the web UI can bundle it, see below)
 
 ### Web UI
 
@@ -81,6 +82,7 @@ publish (the optimized build is noticeably faster).
   `output`, `fixed` (all three, `Body` names), `absent` (e.g. `S1,S2`), `sun`, `planet`, `ring`,
   `planets` (`lo-hi` or a single value), `od`, `minmod`, `ringwall`, `clearance`, `spfact`, `phased=1`,
   `target`, `sort` (`bestfit|ratio|efficiency|simplicity`). Values are percent-encoded.
+- **SCAD export**: the "SCAD" menu offers a single `.scad` with `gears.scad` included, a zip with the design and `gears.scad`, or the plain `.scad`. The library is fetched from GitHub at a pinned commit when you download (nothing is bundled in this repo or image), so the first two need network access; if the fetch fails you get the plain file and a notice.
 - Light and dark themes follow `prefers-color-scheme`; the layout is a single column on phones.
 
 ### Deploy (Docker)
@@ -146,3 +148,5 @@ See `docs/adr/` for the design decisions:
 16. Physical ring OD and planet clearance.
 17. One exhaustive search engine with a bounded top-K.
 18. Assembly condition for stacked planets.
+19. three.js 3D view.
+20. Bundling gears.scad at download time (OpenSCAD export).

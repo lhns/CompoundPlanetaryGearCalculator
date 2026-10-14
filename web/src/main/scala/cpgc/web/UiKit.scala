@@ -19,6 +19,7 @@ object UiKit:
   val titleAttr: HtmlAttr[String] =
     htmlAttr("title", com.raquo.laminar.codecs.StringAsIsCodec)
   val ariaExpanded: HtmlAttr[String] = htmlAttr("aria-expanded", com.raquo.laminar.codecs.StringAsIsCodec)
+  val ariaHasPopup: HtmlAttr[String] = htmlAttr("aria-haspopup", com.raquo.laminar.codecs.StringAsIsCodec)
   val ariaPressed: HtmlAttr[String]  = htmlAttr("aria-pressed", com.raquo.laminar.codecs.StringAsIsCodec)
   val ariaLabel: HtmlAttr[String]    = htmlAttr("aria-label", com.raquo.laminar.codecs.StringAsIsCodec)
   val ariaInvalid: HtmlAttr[String]  = htmlAttr("aria-invalid", com.raquo.laminar.codecs.StringAsIsCodec)

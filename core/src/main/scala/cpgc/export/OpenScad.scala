@@ -4,18 +4,19 @@ import cpgc.domain.{CompoundDesign, Stage}
 import cpgc.render.Phasing
 
 /** Emit a parametric OpenSCAD script that describes the geometry of a winning
-  * compound design. Uses the popular `gears.scad` API conventions; users supply
-  * the library themselves (e.g. `use <gears.scad>` from Chris Wallace / nophead).
+  * compound design. It calls the `spur_gear` / `ring_gear` modules of Dr Jörg
+  * Janssen's `gears.scad` (CC BY-NC-SA, https://github.com/chrisspen/gears), which
+  * we never redistribute: users supply it, or the web UI fetches it at download time
+  * and [[bundle]] inlines it (ADR 0020).
   *
   * ## Phasing (docs/verification/assembly-conditions.md, `render.Phasing`)
   *
-  * Library assumption (Janssen / Wallace `gears.scad`, not available at build
-  * time, so unverified by test): `spur_gear` at rotation 0 has a tooth centred on
-  * the +X axis, and `ring_gear` is the solid minus an external gear of the same
-  * tooth count, so at rotation 0 it has a *gap* centred on +X (its material
-  * tooth is centred half a pitch away). If another library orients its teeth
-  * differently, all gears are off by a constant and only the `*_rot` values below
-  * need shifting.
+  * Library convention, verified against the pinned source (commit a15177f):
+  * `spur_gear` at rotation 0 has a tooth centred on the +X axis, and `ring_gear`
+  * subtracts an external gear of the same tooth count, so at rotation 0 it has a
+  * *gap* centred on +X (its material tooth is centred half a pitch away). If another
+  * library orients its teeth differently, all gears are off by a constant and only
+  * the `*_rot` values below need shifting.
   *
   * `Phasing.solve` gives the tooth-centre angles; the ring's `ring_gear` rotation
   * is its material tooth centre minus half a pitch. For stacked designs with
@@ -25,6 +26,35 @@ import cpgc.render.Phasing
   * best-effort.
   */
 object OpenScad:
+
+  /** Janssen's library, pinned to a commit so downloads stay reproducible (raw GitHub sends CORS `*`). */
+  val LibraryUrl: String =
+    "https://raw.githubusercontent.com/chrisspen/gears/a15177fb116c35d3ce7f98fd01d009df0ca73baf/gears.scad"
+  val LibraryHome: String = "https://github.com/chrisspen/gears"
+  val LibraryAttribution: String = "gears.scad: Dr Jörg Janssen, CC BY-NC-SA"
+
+  private val BeginMarker = s"// ---- begin gears.scad: Dr Jörg Janssen, CC BY-NC-SA, $LibraryHome @ a15177f ----"
+  private val EndMarker   = "// ---- end gears.scad ----"
+
+  /** Replace the `use <...>;` line of an emitted script by the library text itself, so the
+    * script stands alone. Inlining equals `include`, which is safe because the pinned library has
+    * no top-level geometry and its only top-level names (`$fn`, `pi`, `rad`, `clearance`) are not
+    * used by the emitted modules. Throws if `scad` has no `use` line. */
+  def bundle(scad: String, library: String): String =
+    val lines = scad.split("\n", -1).toVector
+    val i = lines.indexWhere(_.trim.matches("""use\s*<[^>]*>\s*;"""))
+    require(i >= 0, "no `use <...>;` line to replace")
+    val lib = if library.endsWith("\n") then library.dropRight(1) else library
+    (lines.take(i) ++ Vector(BeginMarker, lib, EndMarker) ++ lines.drop(i + 1)).mkString("\n")
+
+  /** `rim_width` that makes the library's ring outer diameter equal `s.ringOuterDiameter`.
+    * gears.scad `ring_gear`: outer radius = ra + rim_width, ra = da/2, c = modul/6,
+    * da = d + (modul + c) * (if modul < 1 then 2.2 else 2), d = modul * tooth_number.
+    * Clamped to 0.1 mm so the rim never vanishes. */
+  private def rimWidth(s: Stage): Double =
+    val m  = s.module.value
+    val da = m * s.set.ring.toInt + (m + m / 6) * (if m < 1 then 2.2 else 2.0)
+    math.max(0.1, s.ringOuterDiameter / 2 - da / 2)
 
   /** `turns` reduced modulo one pitch of a `t`-tooth gear, in degrees. */
   private def pitchDeg(turns: Double, t: Int): Double = Phasing.fracSnap(turns * t) / t * 360.0
@@ -47,6 +77,8 @@ object OpenScad:
       "// Layout: the stages are coaxial about the Z axis and separated along +Z (stage 2 above stage 1).",
       "// Couplings that weld central shafts (Ring-Sun, Ring-Ring, Sun-Sun, ...) are not modelled;",
       "// stage 2's rotation relative to stage 1 is arbitrary and is set by the weld.",
+      s"// Needs Dr Jörg Janssen's gears.scad (CC BY-NC-SA) from $LibraryHome,",
+      "// saved next to this file or in OpenSCAD's libraries folder.",
       "// Phasing: gears are rotated so the teeth mesh at every planet position, assuming",
       "// gears.scad puts a spur-gear tooth on +X at rotation 0 and a ring-gear gap there.",
       s"use <$includePath>;",
@@ -85,7 +117,7 @@ object OpenScad:
     val z      = stageHeight(s)
     val m      = s.module.value
     val (sun, planet, ring, n) = (s.set.sun.toInt, s.set.planet.toInt, s.set.ring.toInt, s.set.numPlanets)
-    val rimWidth = s.ringWall // ring OD = m·(Tr+2.5) + 2·wall, so the rim beyond the roots is the wall
+    val rim = rimWidth(s) // library ring OD = Stage.ringOuterDiameter (ADR 0016)
     val common = s"modul=${n6(m)}, width=${n6(z)}"
     // A sun-less stage has no sun gear (its tooth count is only a virtual one).
     val sunLines = ph.sun match
@@ -118,7 +150,7 @@ object OpenScad:
       s"            spur_gear($common, tooth_number=$planet, bore=${n6(bore(3.0, planet, m))}, pressure_angle=20, helix_angle=0, optimized=false);",
       "    // ring",
       s"    ring_rot = ${n6(ringRot)};",
-      s"    rotate([0, 0, ring_rot]) ring_gear($common, tooth_number=$ring, rim_width=${n6(rimWidth)}, pressure_angle=20, helix_angle=0);",
+      s"    rotate([0, 0, ring_rot]) ring_gear($common, tooth_number=$ring, rim_width=${n6(rim)}, pressure_angle=20, helix_angle=0);",
       "  }",
       "}",
       ""

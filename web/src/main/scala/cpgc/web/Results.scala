@@ -6,7 +6,12 @@ import cpgc.`export`.{Csv, Json, OpenScad}
 import cpgc.search.Scorer.SortBy
 import cpgc.web.UiKit.*
 import org.scalajs.dom
+import java.nio.charset.StandardCharsets
+import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
+import scala.scalajs.js.typedarray.Uint8Array
+import scala.util.{Failure, Success}
 
 // Results panel: sort pills, export buttons, the results table, its detail line and the row-count select.
 object Results:
@@ -41,7 +46,7 @@ object Results:
             () => Csv.render(resultsVar.now()), resultsVar.signal.map(_.isEmpty)),
           exportButton("JSON", "application/json", "json",
             () => Json.render(resultsVar.now()), resultsVar.signal.map(_.isEmpty)),
-          scadButton(selectedVar)
+          scadMenu(selectedVar)
         )
       ),
       resultsTable(resultsVar.signal, selectedVar, pageSize.signal, clampedPage),
@@ -119,22 +124,127 @@ object Results:
       }
     )
 
-  private def scadButton(selected: Var[Option[CompoundDesign]]): HtmlElement =
-    button(
-      cls := "export-btn",
-      "SCAD",
-      disabled <-- selected.signal.map(_.isEmpty),
-      onClick.preventDefault --> { _ =>
-        selected.now().foreach { d =>
-          val ratio = math.abs(d.ratio.value).round
-          download(s"cpgc-design-$ratio.scad", "application/x-openscad", OpenScad.emit(d))
+  // ── SCAD menu ──────────────────────────────────────────────────────────────
+
+  private val FetchTimeoutMs = 10000
+  private var libraryCache: Option[String] = None
+
+  /** The pinned gears.scad text. Cached after the first success; fails on network errors,
+    * non-200 answers, a timeout, or a body that is not the library. */
+  private def fetchLibrary(): Future[String] =
+    libraryCache match
+      case Some(lib) => Future.successful(lib)
+      case None =>
+        val ctrl = new dom.AbortController()
+        val timer = js.timers.setTimeout(FetchTimeoutMs)(ctrl.abort())
+        val init = new dom.RequestInit {}
+        init.signal = ctrl.signal
+        val result = dom.fetch(OpenScad.LibraryUrl, init).toFuture.flatMap { r =>
+          if !r.ok then Future.failed(new RuntimeException(s"HTTP ${r.status}"))
+          else r.text().toFuture
+        }.flatMap { text =>
+          if text.contains("module spur_gear") then { libraryCache = Some(text); Future.successful(text) }
+          else Future.failed(new RuntimeException("unexpected content"))
+        }
+        result.onComplete(_ => js.timers.clearTimeout(timer))
+        result
+
+  private def scadName(d: CompoundDesign, ext: String): String =
+    s"cpgc-design-${math.abs(d.ratio.value).round}.$ext"
+
+  private def utf8(s: String): Array[Byte] = s.getBytes(StandardCharsets.UTF_8)
+
+  private def scadMenu(selected: Var[Option[CompoundDesign]]): HtmlElement =
+    val open = Var(false)
+    val busy = Var(false)
+    val menuId = freshId("scad-menu")
+
+    /** Fetch the library, then save what `build` makes of it; on failure save the plain script and say so. */
+    def withLibrary(d: CompoundDesign)(build: String => Unit): Unit =
+      busy.set(true)
+      fetchLibrary().onComplete { res =>
+        busy.set(false)
+        res match
+          case Success(lib) => build(lib)
+          case Failure(_) =>
+            plain(d)
+            UiKit.notify("Couldn't fetch gears.scad, saved the .scad alone. " +
+              "Get gears.scad from github.com/chrisspen/gears and put it next to the file.", ToastLevel.Warn)
+      }
+    def plain(d: CompoundDesign): Unit =
+      download(scadName(d, "scad"), "application/x-openscad", OpenScad.emit(d))
+
+    def item(text: String, act: CompoundDesign => Unit): HtmlElement =
+      button(cls := "menu-item", typ := "button", roleAttr := "menuitem", text,
+        onClick.preventDefault --> { _ =>
+          open.set(false)
+          selected.now().foreach(act)
+        })
+
+    var wrap: Option[dom.html.Element] = None
+    var trigger: Option[dom.html.Element] = None
+    var menuEl: Option[dom.html.Element] = None
+    /** Keep the popup inside the viewport (it is right-aligned to the button, which may sit near the left edge), then focus the first item. */
+    def placeAndFocus(): Unit =
+      js.timers.setTimeout(0) {
+        menuEl.foreach { m =>
+          m.style.transform = ""
+          val r      = m.getBoundingClientRect()
+          val vw     = dom.document.documentElement.clientWidth.toDouble
+          val margin = 8.0
+          val shift  = if r.left < margin then margin - r.left else if r.right > vw - margin then (vw - margin) - r.right else 0.0
+          if shift != 0.0 then m.style.transform = s"translateX(${shift}px)"
+          Option(m.querySelector(".menu-item")).foreach(_.asInstanceOf[dom.html.Element].focus())
         }
       }
+
+    div(cls := "menu-wrap",
+      onMountCallback(c => wrap = Some(c.thisNode.ref)),
+      button(
+        cls := "export-btn", typ := "button",
+        ariaHasPopup := "menu",
+        ariaExpanded <-- open.signal.map(_.toString),
+        aria.controls := menuId,
+        child.text <-- busy.signal.map(b => if b then "SCAD…" else "SCAD ▾"),
+        disabled <-- selected.signal.map(_.isEmpty).combineWith(busy.signal).map(_ || _),
+        onMountCallback(c => trigger = Some(c.thisNode.ref)),
+        onClick.preventDefault --> { _ =>
+          open.update(!_)
+          if open.now() then placeAndFocus()
+        }
+      ),
+      div(cls := "menu", idAttr := menuId, roleAttr := "menu",
+        hidden <-- open.signal.map(!_),
+        onMountCallback(c => menuEl = Some(c.thisNode.ref)),
+        item("Single file (gears.scad included)", d =>
+          withLibrary(d)(lib => download(scadName(d, "scad"), "application/x-openscad", OpenScad.bundle(OpenScad.emit(d), lib)))),
+        item("Zip: design + gears.scad", d =>
+          withLibrary(d) { lib =>
+            val zip = Zip.store(Seq(scadName(d, "scad") -> utf8(OpenScad.emit(d)), "gears.scad" -> utf8(lib)))
+            download(scadName(d, "zip"), "application/zip", toUint8Array(zip))
+          }),
+        item(".scad only (bring your own gears.scad)", plain),
+        a(cls := "menu-note", href := OpenScad.LibraryHome, target := "_blank", rel := "noopener",
+          OpenScad.LibraryAttribution)
+      ),
+      onKeyDown.filter(e => e.key == "Escape" && open.now()) --> { e =>
+        open.set(false)
+        trigger.foreach(_.focus())
+      },
+      // outside click closes the menu
+      documentEvents(_.onClick).filter(e => open.now() && wrap.exists(w => !w.contains(e.target.asInstanceOf[dom.Node])))
+        --> { _ => open.set(false) }
     )
+
+  private def toUint8Array(bytes: Array[Byte]): Uint8Array =
+    val u = new Uint8Array(bytes.length)
+    var i = 0
+    while i < bytes.length do { u(i) = (bytes(i) & 0xFF).toShort; i += 1 }
+    u
 
   /** Save `content` as a file. The anchor is attached to the document for the
     * click (Firefox), and the object URL is revoked after the download started. */
-  private def download(filename: String, mime: String, content: String): Unit =
+  private def download(filename: String, mime: String, content: dom.BlobPart): Unit =
     val options = js.Dynamic.literal(`type` = mime).asInstanceOf[dom.BlobPropertyBag]
     val parts   = js.Array[dom.BlobPart](content)
     val blob    = new dom.Blob(parts, options)
