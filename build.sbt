@@ -2,7 +2,7 @@ import org.scalajs.linker.interface.ModuleKind
 
 ThisBuild / scalaVersion := "3.5.2"
 ThisBuild / organization := "cpgc"
-ThisBuild / version      := "1.0.2"
+ThisBuild / version      := "1.0.3"
 
 ThisBuild / scalacOptions ++= Seq(
   "-deprecation",
